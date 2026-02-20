@@ -42,7 +42,6 @@ def preparar_coordenadas(coord_str):
         return None
 
 def limpiar_nombre_excel(nombre):
-    """Limpia caracteres inválidos para crear hojas de Excel sin error"""
     return re.sub(r'[\\/*?:\[\]]', '_', str(nombre))[:31]
 
 def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, mostrar_por_defecto=True):
@@ -85,7 +84,6 @@ if df.empty:
 
 st.sidebar.header("Gestión de Capas")
 
-# MEJORA 1: Botones de "Seleccionar Todos"
 st.sidebar.markdown("**1. Filtro de Días**")
 dias_disponibles = df['Día'].unique().tolist()
 todos_dias = st.sidebar.checkbox("✔️ Seleccionar Todos los Días", value=True)
@@ -115,13 +113,11 @@ if not rutas_seleccionadas:
 
 # --- EL BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular y Generar Mapa", type="primary"):
-    with st.spinner("Calculando geozonas y trazados óptimos (respetando orden diario)..."):
-        # Centrar mapa en el primer punto del primer día seleccionado
+    with st.spinner("Calculando geozonas y trazados óptimos..."):
         lat_centro_ini = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro_ini = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro_ini, lon_centro_ini], zoom_start=11)
         
-        # Geozonas Generales por Día
         for dia in dias_seleccionados:
             df_este_dia = df[df['Día'] == dia]
             if not df_este_dia.empty:
@@ -131,13 +127,12 @@ if st.sidebar.button("🗺️ Calcular y Generar Mapa", type="primary"):
         datos_para_resumen = []
         color_index = 0
 
-        # MEJORA 2: Doble ciclo (Por Día y luego Por Ruta) para que NUNCA se mezclen geográficamente
         for dia in dias_seleccionados:
             for ruta in rutas_seleccionadas:
                 df_ruta = df[(df['Día'] == dia) & (df['Ruta'] == ruta)].copy().reset_index(drop=True)
                 
                 if df_ruta.empty:
-                    continue # Si esta ruta no existe en este día, saltamos a la siguiente
+                    continue
                 
                 identificador_unico = f"{dia} - {ruta}"
                 lista_coordenadas = df_ruta['Coords_Procesadas'].tolist()
@@ -242,7 +237,8 @@ if st.session_state['calculo_terminado']:
                 with c1:
                     hora_inicio = st.time_input("Salida", value=datetime.time(9, 0), key=f"start_{datos['id_unico']}")
                 with c2:
-                    min_parada = st.number_input("Espera (min)", min_value=0, value=0, step=1, key=f"stop_{datos['id_unico']}")
+                    # MEJORA: Valor predeterminado de 15 minutos
+                    min_parada = st.number_input("Espera (min)", min_value=0, value=15, step=1, key=f"stop_{datos['id_unico']}")
                 
                 tiempo_total_paradas = min_parada * datos['puntos']
                 tiempo_total_ruta = datos['drive_mins'] + tiempo_total_paradas
@@ -255,21 +251,35 @@ if st.session_state['calculo_terminado']:
                 salida_anterior = fecha_base
                 cronograma_ruta = []
                 
+                distancia_acumulada = 0.0 # Inicializamos el contador de kilómetros
+                
                 for idx, parada in enumerate(datos['paradas']):
                     if idx == 0:
                         llegada = tiempo_actual
+                        dist_tramo = 0.0
                     else:
                         segundos_manejo = datos['segmentos'][idx-1]['duration'] if len(datos['segmentos']) > idx-1 else 0
+                        metros_tramo = datos['segmentos'][idx-1]['distance'] if len(datos['segmentos']) > idx-1 else 0
+                        
+                        dist_tramo = round(metros_tramo / 1000, 2)
                         llegada = salida_anterior + datetime.timedelta(seconds=segundos_manejo)
+                    
+                    distancia_acumulada += dist_tramo
+                    distancia_acumulada = round(distancia_acumulada, 2)
                     
                     salida = llegada + datetime.timedelta(minutes=min_parada)
                     salida_anterior = salida 
                     
                     cronograma_ruta.append({
-                        "Día": parada['Día'], "Ruta": parada['Ruta'],
-                        "Departamento": parada['Departamento'], "Lugar": parada['Lugar'],
-                        "Coordenadas": parada['Coordenadas'], "Llegada": llegada.strftime("%H:%M"),
-                        "Salida": salida.strftime("%H:%M")
+                        "Día": parada['Día'], 
+                        "Ruta": parada['Ruta'],
+                        "Departamento": parada['Departamento'], 
+                        "Lugar": parada['Lugar'],
+                        "Coordenadas": parada['Coordenadas'], 
+                        "Llegada": llegada.strftime("%H:%M"),
+                        "Salida": salida.strftime("%H:%M"),
+                        "Distancia (Kms)": dist_tramo,
+                        "Distancia Acum. (Kms)": distancia_acumulada
                     })
                     
                 todos_los_cronogramas.extend(cronograma_ruta)
