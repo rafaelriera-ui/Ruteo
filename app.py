@@ -16,6 +16,10 @@ st.title("🚚 Gestor de Rutas y Capas")
 # --- API KEY PREDETERMINADA ---
 api_key = "5b3ce3597851110001cf62480080f4189d6143db946e7c7267b9343d"
 
+# --- INICIALIZAR MEMORIA ESTABLE ---
+if 'calculo_terminado' not in st.session_state:
+    st.session_state['calculo_terminado'] = False
+
 # --- BARRA LATERAL ---
 st.sidebar.header("Carga de Datos")
 archivo_subido = st.sidebar.file_uploader("Sube tu archivo Excel", type=["xlsx", "xls"])
@@ -72,10 +76,10 @@ if archivo_subido is not None:
                 rutas_disponibles = df_dia['Ruta'].unique()
                 rutas_seleccionadas = st.sidebar.multiselect("Selecciona las Subcapas (Rutas) a calcular:", rutas_disponibles)
                 
-                # CÁLCULO Y GUARDADO EN MEMORIA
-                if st.button("🗺️ Calcular y Generar Mapa"):
+                # EL BOTÓN AHORA SOLO CAMBIA EL ESTADO DE LA MEMORIA
+                if st.sidebar.button("🗺️ Calcular y Generar Mapa", type="primary"):
                     if not rutas_seleccionadas:
-                        st.warning("Selecciona al menos una ruta.")
+                        st.sidebar.warning("Selecciona al menos una ruta.")
                     else:
                         with st.spinner("Calculando geozonas circulares y trazados óptimos..."):
                             lat_centro_ini = df_dia.iloc[0]['Coords_Procesadas'][1]
@@ -129,14 +133,17 @@ if archivo_subido is not None:
                                         if response_rutas.status_code == 200:
                                             geojson_ruta = response_rutas.json()
                                             propiedades = geojson_ruta['features'][0]['properties']['summary']
-                                            segmentos = geojson_ruta['features'][0]['properties'].get('segments', []) # Extraer tiempos tramo a tramo
+                                            segmentos = geojson_ruta['features'][0]['properties'].get('segments', [])
                                             
                                             paradas_ordenadas = []
                                             for paso, nodo in enumerate(nodos_ordenados):
                                                 fila = df_ruta.iloc[nodo]
                                                 paradas_ordenadas.append({
-                                                    "Lugar": fila.get('Lugar', 'Sin nombre'),
-                                                    "Departamento": fila.get('Departamento', '')
+                                                    "Día": fila.get('Día', ''),
+                                                    "Ruta": fila.get('Ruta', ''),
+                                                    "Departamento": fila.get('Departamento', ''),
+                                                    "Lugar": fila.get('Lugar', ''),
+                                                    "Coordenadas": fila.get('Coordenadas', '')
                                                 })
                                             
                                             datos_para_resumen.append({
@@ -163,118 +170,109 @@ if archivo_subido is not None:
 
                             folium.LayerControl(collapsed=False).add_to(mapa_calculado)
                             
+                            # GUARDAMOS EN MEMORIA Y AVISAMOS QUE EL CÁLCULO TERMINÓ
                             st.session_state['mapa_guardado'] = mapa_calculado
                             st.session_state['datos_resumen'] = datos_para_resumen
+                            st.session_state['calculo_terminado'] = True
 
-                # VISUALIZACIÓN DESDE LA MEMORIA (Evita que desaparezca)
-                if 'mapa_guardado' in st.session_state and 'datos_resumen' in st.session_state:
+                # --- PANTALLA FIJA (Se lee desde la memoria, no se borra) ---
+                if st.session_state['calculo_terminado']:
                     col_mapa, col_resumen = st.columns([2, 1])
                     
                     with col_mapa:
                         st.subheader("Mapa Interactivo")
-                        # El key="mapa_interactivo_fijo" impide que la recarga de variables borre el mapa
-                        st_folium(st.session_state['mapa_guardado'], width=800, height=750, returned_objects=[], key="mapa_interactivo_fijo")
+                        # El key evita que Streamlit borre el mapa al interactuar con otras cosas
+                        st_folium(st.session_state['mapa_guardado'], width=800, height=750, returned_objects=[], key="mapa_fijo")
                         
                     with col_resumen:
-                        st.subheader("Resumen y Cronograma")
-                        st.write("Ajusta los horarios y minutos de espera para calcular llegadas.")
+                        st.subheader("Cronograma Dinámico")
+                        st.write("Ajusta tiempos para recalcular las horas de llegada.")
                         
-                        datos_generales_excel = [] 
-                        datos_detallados_excel = []
+                        todos_los_cronogramas = [] # Aquí juntaremos todas las rutas para la descarga global
                         
                         for datos in st.session_state['datos_resumen']:
                             st.markdown(f"---")
                             st.markdown(f"### 📍 Ruta: {datos['ruta']}")
                             
-                            # Inputs interactivos
                             col_t1, col_t2 = st.columns(2)
                             with col_t1:
-                                hora_inicio = st.time_input(f"Inicio ({datos['ruta']})", value=datetime.time(8, 0), key=f"start_{datos['ruta']}")
+                                hora_inicio = st.time_input(f"Salida ({datos['ruta']})", value=datetime.time(8, 0), key=f"start_{datos['ruta']}")
                             with col_t2:
                                 min_parada = st.number_input(f"Espera (min)", min_value=0, value=0, step=1, key=f"stop_{datos['ruta']}")
                             
-                            # Cálculos de Cronograma Tramo a Tramo
                             fecha_base = datetime.datetime.combine(datetime.date.today(), hora_inicio)
                             tiempo_actual = fecha_base
-                            cronograma = []
+                            salida_anterior = fecha_base
+                            cronograma_ruta = []
                             
                             for idx, parada in enumerate(datos['paradas']):
-                                # El tiempo de manejo (el primer punto es 0 porque es el origen)
                                 if idx == 0:
                                     llegada = tiempo_actual
                                 else:
-                                    # Los segmentos en ORS vienen en segundos
                                     segundos_manejo = datos['segmentos'][idx-1]['duration'] if len(datos['segmentos']) > idx-1 else 0
-                                    llegada = tiempo_actual + datetime.timedelta(seconds=segundos_manejo)
+                                    llegada = salida_anterior + datetime.timedelta(seconds=segundos_manejo)
                                 
                                 salida = llegada + datetime.timedelta(minutes=min_parada)
-                                tiempo_actual = salida # Actualizamos el reloj para la siguiente parada
+                                salida_anterior = salida 
                                 
-                                cronograma.append({
-                                    "Orden": idx + 1,
-                                    "Lugar": parada['Lugar'],
+                                cronograma_ruta.append({
+                                    "Día": parada['Día'],
+                                    "Ruta": parada['Ruta'],
                                     "Departamento": parada['Departamento'],
+                                    "Lugar": parada['Lugar'],
+                                    "Coordenadas": parada['Coordenadas'],
                                     "Llegada": llegada.strftime("%H:%M"),
                                     "Salida": salida.strftime("%H:%M")
                                 })
                                 
-                                # Guardar para la pestaña de detalles del Excel
-                                datos_detallados_excel.append({
-                                    "Ruta": datos['ruta'],
-                                    "Orden": idx + 1,
-                                    "Lugar": parada['Lugar'],
-                                    "Departamento": parada['Departamento'],
-                                    "Hora de Llegada": llegada.strftime("%H:%M"),
-                                    "Minutos de Espera": min_parada,
-                                    "Hora de Salida": salida.strftime("%H:%M")
-                                })
+                            # Sumar esta ruta a la lista global
+                            todos_los_cronogramas.extend(cronograma_ruta)
 
-                            # Cálculos generales
                             tiempo_total_paradas = min_parada * datos['puntos']
                             tiempo_total_ruta = datos['drive_mins'] + tiempo_total_paradas
                             
                             c1, c2 = st.columns(2)
                             c1.metric("Puntos", datos['puntos'])
                             c2.metric("Distancia", f"{datos['dist_km']} km")
+                            st.metric("⏱️ TIEMPO TOTAL ESTIMADO", value=f"{tiempo_total_ruta:.0f} min")
                             
-                            st.metric(
-                                label="⏱️ TIEMPO TOTAL ESTIMADO", 
-                                value=f"{tiempo_total_ruta:.0f} min",
-                                delta=f"{datos['drive_mins']:.0f} min manejo + {tiempo_total_paradas} min espera",
-                                delta_color="off"
-                            )
-                            
-                            # Acordeón con el cronograma detallado
-                            with st.expander("Ver cronograma detallado por parada"):
-                                df_cronograma = pd.DataFrame(cronograma)
-                                # Ocultar el índice por defecto para que se vea más limpio
-                                st.dataframe(df_cronograma.set_index('Orden'), use_container_width=True)
-                            
-                            # Guardamos la info general para el Excel
-                            datos_generales_excel.append({
-                                "Ruta": datos['ruta'],
-                                "Puntos a visitar": datos['puntos'],
-                                "Distancia (Km)": datos['dist_km'],
-                                "Manejo Estimado (Minutos)": datos['drive_mins'],
-                                "Minutos de Espera (Total)": tiempo_total_paradas,
-                                "Tiempo Total del Recorrido (Min)": tiempo_total_ruta
-                            })
+                            # Acordeón con botón de descarga unitario
+                            with st.expander("Ver y Descargar Cronograma de esta Ruta"):
+                                df_ruta_detallada = pd.DataFrame(cronograma_ruta)
+                                st.dataframe(df_ruta_detallada, use_container_width=True)
+                                
+                                buffer_indiv = io.BytesIO()
+                                with pd.ExcelWriter(buffer_indiv, engine='openpyxl') as writer:
+                                    df_ruta_detallada.to_excel(writer, index=False, sheet_name=datos['ruta'][:31]) # Excel limita el nombre de hoja a 31 chars
+                                
+                                st.download_button(
+                                    label=f"📥 Descargar Solo Ruta {datos['ruta']}",
+                                    data=buffer_indiv.getvalue(),
+                                    file_name=f"Cronograma_Ruta_{datos['ruta']}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    key=f"dl_{datos['ruta']}"
+                                )
 
-                        # BOTÓN DE DESCARGA EN EXCEL CON 2 PESTAÑAS
-                        if len(datos_generales_excel) > 0:
-                            st.markdown("---")
-                            buffer = io.BytesIO()
-                            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                                pd.DataFrame(datos_generales_excel).to_excel(writer, index=False, sheet_name='Resumen General')
-                                pd.DataFrame(datos_detallados_excel).to_excel(writer, index=False, sheet_name='Cronograma Detallado')
-                            
-                            st.download_button(
-                                label="📥 Descargar Cronograma en Excel",
-                                data=buffer.getvalue(),
-                                file_name="Cronograma_Rutas.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                type="primary"
-                            )
+                    # SÚPER BOTÓN DE DESCARGA GLOBAL AL FINAL DE LA PANTALLA
+                    if len(todos_los_cronogramas) > 0:
+                        st.markdown("---")
+                        st.markdown("### 💾 Exportación Global")
+                        df_global = pd.DataFrame(todos_los_cronogramas)
+                        
+                        buffer_global = io.BytesIO()
+                        with pd.ExcelWriter(buffer_global, engine='openpyxl') as writer:
+                            df_global.to_excel(writer, index=False, sheet_name='Cronograma Maestro')
+                        
+                        st.download_button(
+                            label="📥 DESCARGAR CRONOGRAMA MAESTRO (Todas las rutas unificadas)",
+                            data=buffer_global.getvalue(),
+                            file_name="Cronograma_Logistica_Completo.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary",
+                            use_container_width=True
+                        )
 
+else:
+    st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
 else:
     st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
