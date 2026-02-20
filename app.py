@@ -24,11 +24,16 @@ if 'calculo_terminado' not in st.session_state:
 st.sidebar.header("Carga de Datos")
 archivo_subido = st.sidebar.file_uploader("Sube tu archivo Excel", type=["xlsx", "xls"])
 
+# --- CLÁUSULA DE GUARDA: Si no hay archivo, frenamos la app aquí ---
+if archivo_subido is None:
+    st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
+    st.stop() # Esto detiene la ejecución limpiamente, reemplazando al problemático "else:"
+
+# --- FUNCIONES ---
 def preparar_coordenadas(coord_str):
     lat, lon = map(float, str(coord_str).strip().split(','))
     return [lon, lat]
 
-# --- FUNCIÓN: DIBUJAR GEOZONA CIRCULAR ---
 def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, mostrar_por_defecto=True):
     coords_lat_lon = [(p[1], p[0]) for p in coordenadas_lon_lat]
     
@@ -57,222 +62,217 @@ def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, most
         ).add_to(capa)
         capa.add_to(mapa)
 
-# --- LÓGICA PRINCIPAL ---
-if archivo_subido is not None:
-    df = pd.read_excel(archivo_subido)
-    df.columns = df.columns.str.strip() 
-    
-    if 'Coordenadas' in df.columns:
-        df = df[df['Coordenadas'].astype(str).str.contains(',', na=False)].copy()
-        df['Coords_Procesadas'] = df['Coordenadas'].apply(preparar_coordenadas)
+# --- LÓGICA PRINCIPAL (Ahora mucho más plana y segura) ---
+df = pd.read_excel(archivo_subido)
+df.columns = df.columns.str.strip() 
+
+# Validaciones de columnas
+columnas_requeridas = ['Coordenadas', 'Día', 'Ruta']
+for col in columnas_requeridas:
+    if col not in df.columns:
+        st.error(f"❌ No se encontró la columna '{col}' en tu archivo Excel.")
+        st.stop()
+
+# Limpieza de datos
+df = df[df['Coordenadas'].astype(str).str.contains(',', na=False)].copy()
+df['Coords_Procesadas'] = df['Coordenadas'].apply(preparar_coordenadas)
+
+st.sidebar.header("Gestión de Capas")
+dias_disponibles = df['Día'].unique()
+dia_seleccionado = st.sidebar.selectbox("Selecciona la Capa Principal (Día):", dias_disponibles)
+df_dia = df[df['Día'] == dia_seleccionado]
+
+rutas_disponibles = df_dia['Ruta'].unique()
+rutas_seleccionadas = st.sidebar.multiselect("Selecciona las Subcapas (Rutas) a calcular:", rutas_disponibles)
+
+# --- EL BOTÓN DE CÁLCULO ---
+if st.sidebar.button("🗺️ Calcular y Generar Mapa", type="primary"):
+    if not rutas_seleccionadas:
+        st.sidebar.warning("Selecciona al menos una ruta.")
+        st.stop()
         
-        st.sidebar.header("Gestión de Capas")
-        if 'Día' in df.columns:
-            dias_disponibles = df['Día'].unique()
-            dia_seleccionado = st.sidebar.selectbox("Selecciona la Capa Principal (Día):", dias_disponibles)
-            df_dia = df[df['Día'] == dia_seleccionado]
+    with st.spinner("Calculando geozonas circulares y trazados óptimos..."):
+        lat_centro_ini = df_dia.iloc[0]['Coords_Procesadas'][1]
+        lon_centro_ini = df_dia.iloc[0]['Coords_Procesadas'][0]
+        mapa_calculado = folium.Map(location=[lat_centro_ini, lon_centro_ini], zoom_start=11)
+        
+        lista_dia_completo = df_dia['Coords_Procesadas'].tolist()
+        dibujar_geozona_circular(lista_dia_completo, f"🌍 GEOZONA DÍA: {dia_seleccionado}", "black", mapa_calculado, mostrar_por_defecto=True)
+        
+        colores_rutas = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'cadetblue']
+        datos_para_resumen = []
+
+        for i, ruta in enumerate(rutas_seleccionadas):
+            df_ruta = df_dia[df_dia['Ruta'] == ruta].copy().reset_index(drop=True)
+            lista_coordenadas = df_ruta['Coords_Procesadas'].tolist()
+            color_actual = colores_rutas[i % len(colores_rutas)]
+            num_puntos = len(df_ruta)
             
-            if 'Ruta' in df_dia.columns:
-                rutas_disponibles = df_dia['Ruta'].unique()
-                rutas_seleccionadas = st.sidebar.multiselect("Selecciona las Subcapas (Rutas) a calcular:", rutas_disponibles)
+            dibujar_geozona_circular(lista_coordenadas, f"🗺️ Geozona Ruta: {ruta}", color_actual, mapa_calculado, mostrar_por_defecto=True)
+            
+            deptos_en_ruta = df_ruta['Departamento'].unique() if 'Departamento' in df_ruta.columns else []
+            for depto in deptos_en_ruta:
+                coords_depto = df_ruta[df_ruta['Departamento'] == depto]['Coords_Procesadas'].tolist()
+                dibujar_geozona_circular(coords_depto, f"    📍 Geozona Depto: {depto} (Ruta {ruta})", color_actual, mapa_calculado, mostrar_por_defecto=False)
+
+            url_matriz = 'https://api.openrouteservice.org/v2/matrix/driving-car'
+            headers = {'Authorization': api_key, 'Content-Type': 'application/json'}
+            response_matriz = requests.post(url_matriz, json={"locations": lista_coordenadas, "metrics": ["distance"]}, headers=headers)
+            
+            if response_matriz.status_code == 200:
+                matriz = response_matriz.json()['distances']
+                manager = pywrapcp.RoutingIndexManager(len(matriz), 1, 0)
+                routing = pywrapcp.RoutingModel(manager)
+                def distance_callback(from_index, to_index): return int(matriz[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
+                transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+                routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+                search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+                search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                solution = routing.SolveWithParameters(search_parameters)
                 
-                # EL BOTÓN AHORA SOLO CAMBIA EL ESTADO DE LA MEMORIA
-                if st.sidebar.button("🗺️ Calcular y Generar Mapa", type="primary"):
-                    if not rutas_seleccionadas:
-                        st.sidebar.warning("Selecciona al menos una ruta.")
-                    else:
-                        with st.spinner("Calculando geozonas circulares y trazados óptimos..."):
-                            lat_centro_ini = df_dia.iloc[0]['Coords_Procesadas'][1]
-                            lon_centro_ini = df_dia.iloc[0]['Coords_Procesadas'][0]
-                            mapa_calculado = folium.Map(location=[lat_centro_ini, lon_centro_ini], zoom_start=11)
-                            
-                            lista_dia_completo = df_dia['Coords_Procesadas'].tolist()
-                            dibujar_geozona_circular(lista_dia_completo, f"🌍 GEOZONA DÍA: {dia_seleccionado}", "black", mapa_calculado, mostrar_por_defecto=True)
-                            
-                            colores_rutas = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'cadetblue']
-                            datos_para_resumen = []
-
-                            for i, ruta in enumerate(rutas_seleccionadas):
-                                df_ruta = df_dia[df_dia['Ruta'] == ruta].copy().reset_index(drop=True)
-                                lista_coordenadas = df_ruta['Coords_Procesadas'].tolist()
-                                color_actual = colores_rutas[i % len(colores_rutas)]
-                                num_puntos = len(df_ruta)
-                                
-                                dibujar_geozona_circular(lista_coordenadas, f"🗺️ Geozona Ruta: {ruta}", color_actual, mapa_calculado, mostrar_por_defecto=True)
-                                
-                                deptos_en_ruta = df_ruta['Departamento'].unique() if 'Departamento' in df_ruta.columns else []
-                                for depto in deptos_en_ruta:
-                                    coords_depto = df_ruta[df_ruta['Departamento'] == depto]['Coords_Procesadas'].tolist()
-                                    dibujar_geozona_circular(coords_depto, f"    📍 Geozona Depto: {depto} (Ruta {ruta})", color_actual, mapa_calculado, mostrar_por_defecto=False)
-
-                                url_matriz = 'https://api.openrouteservice.org/v2/matrix/driving-car'
-                                headers = {'Authorization': api_key, 'Content-Type': 'application/json'}
-                                response_matriz = requests.post(url_matriz, json={"locations": lista_coordenadas, "metrics": ["distance"]}, headers=headers)
-                                
-                                if response_matriz.status_code == 200:
-                                    matriz = response_matriz.json()['distances']
-                                    manager = pywrapcp.RoutingIndexManager(len(matriz), 1, 0)
-                                    routing = pywrapcp.RoutingModel(manager)
-                                    def distance_callback(from_index, to_index): return int(matriz[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
-                                    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
-                                    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-                                    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                                    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-                                    solution = routing.SolveWithParameters(search_parameters)
-                                    
-                                    if solution:
-                                        index = routing.Start(0)
-                                        nodos_ordenados = []
-                                        while not routing.IsEnd(index):
-                                            nodos_ordenados.append(manager.IndexToNode(index))
-                                            index = solution.Value(routing.NextVar(index))
-                                        
-                                        coords_ordenadas = [lista_coordenadas[j] for j in nodos_ordenados]
-                                        response_rutas = requests.post('https://api.openrouteservice.org/v2/directions/driving-car/geojson', json={"coordinates": coords_ordenadas}, headers=headers)
-                                        
-                                        if response_rutas.status_code == 200:
-                                            geojson_ruta = response_rutas.json()
-                                            propiedades = geojson_ruta['features'][0]['properties']['summary']
-                                            segmentos = geojson_ruta['features'][0]['properties'].get('segments', [])
-                                            
-                                            paradas_ordenadas = []
-                                            for paso, nodo in enumerate(nodos_ordenados):
-                                                fila = df_ruta.iloc[nodo]
-                                                paradas_ordenadas.append({
-                                                    "Día": fila.get('Día', ''),
-                                                    "Ruta": fila.get('Ruta', ''),
-                                                    "Departamento": fila.get('Departamento', ''),
-                                                    "Lugar": fila.get('Lugar', ''),
-                                                    "Coordenadas": fila.get('Coordenadas', '')
-                                                })
-                                            
-                                            datos_para_resumen.append({
-                                                "ruta": ruta,
-                                                "puntos": num_puntos,
-                                                "dist_km": round(propiedades['distance'] / 1000, 2),
-                                                "drive_mins": round(propiedades['duration'] / 60, 0),
-                                                "color": color_actual,
-                                                "paradas": paradas_ordenadas,
-                                                "segmentos": segmentos
-                                            })
-                                            
-                                            capa_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta}")
-                                            folium.GeoJson(geojson_ruta, style_function=lambda x, c=color_actual: {'color': c, 'weight': 4, 'opacity': 0.9}).add_to(capa_trazado)
-                                            
-                                            for paso, nodo in enumerate(nodos_ordenados):
-                                                fila = df_ruta.iloc[nodo]
-                                                lat, lon = fila['Coords_Procesadas'][1], fila['Coords_Procesadas'][0]
-                                                popup_html = f"<b>Orden:</b> {paso+1}<br><b>Día:</b> {fila.get('Día', '')}<br><b>Ruta:</b> {fila.get('Ruta', '')}<br><b>Depto:</b> {fila.get('Departamento', '')}<br><b>Lugar:</b> {fila.get('Lugar', '')}"
-                                                icono = folium.DivIcon(html=f"<div style='font-size: 10pt; font-weight: bold; color: white; background-color: {color_actual}; border-radius: 50%; width: 20px; height: 20px; text-align: center; border: 2px solid white; box-shadow: 2px 2px 4px rgba(0,0,0,0.4);'>{paso + 1}</div>")
-                                                folium.Marker([lat, lon], popup=popup_html, icon=icono).add_to(capa_trazado)
-                                            
-                                            capa_trazado.add_to(mapa_calculado)
-
-                            folium.LayerControl(collapsed=False).add_to(mapa_calculado)
-                            
-                            # GUARDAMOS EN MEMORIA Y AVISAMOS QUE EL CÁLCULO TERMINÓ
-                            st.session_state['mapa_guardado'] = mapa_calculado
-                            st.session_state['datos_resumen'] = datos_para_resumen
-                            st.session_state['calculo_terminado'] = True
-
-                # --- PANTALLA FIJA (Se lee desde la memoria, no se borra) ---
-                if st.session_state['calculo_terminado']:
-                    col_mapa, col_resumen = st.columns([2, 1])
+                if solution:
+                    index = routing.Start(0)
+                    nodos_ordenados = []
+                    while not routing.IsEnd(index):
+                        nodos_ordenados.append(manager.IndexToNode(index))
+                        index = solution.Value(routing.NextVar(index))
                     
-                    with col_mapa:
-                        st.subheader("Mapa Interactivo")
-                        # El key evita que Streamlit borre el mapa al interactuar con otras cosas
-                        st_folium(st.session_state['mapa_guardado'], width=800, height=750, returned_objects=[], key="mapa_fijo")
+                    coords_ordenadas = [lista_coordenadas[j] for j in nodos_ordenados]
+                    response_rutas = requests.post('https://api.openrouteservice.org/v2/directions/driving-car/geojson', json={"coordinates": coords_ordenadas}, headers=headers)
+                    
+                    if response_rutas.status_code == 200:
+                        geojson_ruta = response_rutas.json()
+                        propiedades = geojson_ruta['features'][0]['properties']['summary']
+                        segmentos = geojson_ruta['features'][0]['properties'].get('segments', [])
                         
-                    with col_resumen:
-                        st.subheader("Cronograma Dinámico")
-                        st.write("Ajusta tiempos para recalcular las horas de llegada.")
+                        paradas_ordenadas = []
+                        for paso, nodo in enumerate(nodos_ordenados):
+                            fila = df_ruta.iloc[nodo]
+                            paradas_ordenadas.append({
+                                "Día": fila.get('Día', ''),
+                                "Ruta": fila.get('Ruta', ''),
+                                "Departamento": fila.get('Departamento', ''),
+                                "Lugar": fila.get('Lugar', ''),
+                                "Coordenadas": fila.get('Coordenadas', '')
+                            })
                         
-                        todos_los_cronogramas = [] # Aquí juntaremos todas las rutas para la descarga global
+                        datos_para_resumen.append({
+                            "ruta": ruta,
+                            "puntos": num_puntos,
+                            "dist_km": round(propiedades['distance'] / 1000, 2),
+                            "drive_mins": round(propiedades['duration'] / 60, 0),
+                            "color": color_actual,
+                            "paradas": paradas_ordenadas,
+                            "segmentos": segmentos
+                        })
                         
-                        for datos in st.session_state['datos_resumen']:
-                            st.markdown(f"---")
-                            st.markdown(f"### 📍 Ruta: {datos['ruta']}")
-                            
-                            col_t1, col_t2 = st.columns(2)
-                            with col_t1:
-                                hora_inicio = st.time_input(f"Salida ({datos['ruta']})", value=datetime.time(8, 0), key=f"start_{datos['ruta']}")
-                            with col_t2:
-                                min_parada = st.number_input(f"Espera (min)", min_value=0, value=0, step=1, key=f"stop_{datos['ruta']}")
-                            
-                            fecha_base = datetime.datetime.combine(datetime.date.today(), hora_inicio)
-                            tiempo_actual = fecha_base
-                            salida_anterior = fecha_base
-                            cronograma_ruta = []
-                            
-                            for idx, parada in enumerate(datos['paradas']):
-                                if idx == 0:
-                                    llegada = tiempo_actual
-                                else:
-                                    segundos_manejo = datos['segmentos'][idx-1]['duration'] if len(datos['segmentos']) > idx-1 else 0
-                                    llegada = salida_anterior + datetime.timedelta(seconds=segundos_manejo)
-                                
-                                salida = llegada + datetime.timedelta(minutes=min_parada)
-                                salida_anterior = salida 
-                                
-                                cronograma_ruta.append({
-                                    "Día": parada['Día'],
-                                    "Ruta": parada['Ruta'],
-                                    "Departamento": parada['Departamento'],
-                                    "Lugar": parada['Lugar'],
-                                    "Coordenadas": parada['Coordenadas'],
-                                    "Llegada": llegada.strftime("%H:%M"),
-                                    "Salida": salida.strftime("%H:%M")
-                                })
-                                
-                            # Sumar esta ruta a la lista global
-                            todos_los_cronogramas.extend(cronograma_ruta)
+                        capa_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta}")
+                        folium.GeoJson(geojson_ruta, style_function=lambda x, c=color_actual: {'color': c, 'weight': 4, 'opacity': 0.9}).add_to(capa_trazado)
+                        
+                        for paso, nodo in enumerate(nodos_ordenados):
+                            fila = df_ruta.iloc[nodo]
+                            lat, lon = fila['Coords_Procesadas'][1], fila['Coords_Procesadas'][0]
+                            popup_html = f"<b>Orden:</b> {paso+1}<br><b>Día:</b> {fila.get('Día', '')}<br><b>Ruta:</b> {fila.get('Ruta', '')}<br><b>Depto:</b> {fila.get('Departamento', '')}<br><b>Lugar:</b> {fila.get('Lugar', '')}"
+                            icono = folium.DivIcon(html=f"<div style='font-size: 10pt; font-weight: bold; color: white; background-color: {color_actual}; border-radius: 50%; width: 20px; height: 20px; text-align: center; border: 2px solid white; box-shadow: 2px 2px 4px rgba(0,0,0,0.4);'>{paso + 1}</div>")
+                            folium.Marker([lat, lon], popup=popup_html, icon=icono).add_to(capa_trazado)
+                        
+                        capa_trazado.add_to(mapa_calculado)
 
-                            tiempo_total_paradas = min_parada * datos['puntos']
-                            tiempo_total_ruta = datos['drive_mins'] + tiempo_total_paradas
-                            
-                            c1, c2 = st.columns(2)
-                            c1.metric("Puntos", datos['puntos'])
-                            c2.metric("Distancia", f"{datos['dist_km']} km")
-                            st.metric("⏱️ TIEMPO TOTAL ESTIMADO", value=f"{tiempo_total_ruta:.0f} min")
-                            
-                            # Acordeón con botón de descarga unitario
-                            with st.expander("Ver y Descargar Cronograma de esta Ruta"):
-                                df_ruta_detallada = pd.DataFrame(cronograma_ruta)
-                                st.dataframe(df_ruta_detallada, use_container_width=True)
-                                
-                                buffer_indiv = io.BytesIO()
-                                with pd.ExcelWriter(buffer_indiv, engine='openpyxl') as writer:
-                                    df_ruta_detallada.to_excel(writer, index=False, sheet_name=datos['ruta'][:31]) # Excel limita el nombre de hoja a 31 chars
-                                
-                                st.download_button(
-                                    label=f"📥 Descargar Solo Ruta {datos['ruta']}",
-                                    data=buffer_indiv.getvalue(),
-                                    file_name=f"Cronograma_Ruta_{datos['ruta']}.xlsx",
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    key=f"dl_{datos['ruta']}"
-                                )
+        folium.LayerControl(collapsed=False).add_to(mapa_calculado)
+        
+        st.session_state['mapa_guardado'] = mapa_calculado
+        st.session_state['datos_resumen'] = datos_para_resumen
+        st.session_state['calculo_terminado'] = True
 
-                    # SÚPER BOTÓN DE DESCARGA GLOBAL AL FINAL DE LA PANTALLA
-                    if len(todos_los_cronogramas) > 0:
-                        st.markdown("---")
-                        st.markdown("### 💾 Exportación Global")
-                        df_global = pd.DataFrame(todos_los_cronogramas)
-                        
-                        buffer_global = io.BytesIO()
-                        with pd.ExcelWriter(buffer_global, engine='openpyxl') as writer:
-                            df_global.to_excel(writer, index=False, sheet_name='Cronograma Maestro')
-                        
-                        st.download_button(
-                            label="📥 DESCARGAR CRONOGRAMA MAESTRO (Todas las rutas unificadas)",
-                            data=buffer_global.getvalue(),
-                            file_name="Cronograma_Logistica_Completo.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            type="primary",
-                            use_container_width=True
-                        )
+# --- PANTALLA FIJA (Se lee desde la memoria) ---
+if st.session_state['calculo_terminado']:
+    col_mapa, col_resumen = st.columns([2, 1])
+    
+    with col_mapa:
+        st.subheader("Mapa Interactivo")
+        st_folium(st.session_state['mapa_guardado'], width=800, height=750, returned_objects=[], key="mapa_fijo")
+        
+    with col_resumen:
+        st.subheader("Cronograma Dinámico")
+        st.write("Ajusta tiempos para recalcular las horas de llegada.")
+        
+        todos_los_cronogramas = [] 
+        
+        for datos in st.session_state['datos_resumen']:
+            st.markdown(f"---")
+            st.markdown(f"### 📍 Ruta: {datos['ruta']}")
+            
+            col_t1, col_t2 = st.columns(2)
+            with col_t1:
+                hora_inicio = st.time_input(f"Salida ({datos['ruta']})", value=datetime.time(8, 0), key=f"start_{datos['ruta']}")
+            with col_t2:
+                min_parada = st.number_input(f"Espera (min)", min_value=0, value=0, step=1, key=f"stop_{datos['ruta']}")
+            
+            fecha_base = datetime.datetime.combine(datetime.date.today(), hora_inicio)
+            tiempo_actual = fecha_base
+            salida_anterior = fecha_base
+            cronograma_ruta = []
+            
+            for idx, parada in enumerate(datos['paradas']):
+                if idx == 0:
+                    llegada = tiempo_actual
+                else:
+                    segundos_manejo = datos['segmentos'][idx-1]['duration'] if len(datos['segmentos']) > idx-1 else 0
+                    llegada = salida_anterior + datetime.timedelta(seconds=segundos_manejo)
+                
+                salida = llegada + datetime.timedelta(minutes=min_parada)
+                salida_anterior = salida 
+                
+                cronograma_ruta.append({
+                    "Día": parada['Día'],
+                    "Ruta": parada['Ruta'],
+                    "Departamento": parada['Departamento'],
+                    "Lugar": parada['Lugar'],
+                    "Coordenadas": parada['Coordenadas'],
+                    "Llegada": llegada.strftime("%H:%M"),
+                    "Salida": salida.strftime("%H:%M")
+                })
+                
+            todos_los_cronogramas.extend(cronograma_ruta)
 
-else:
-    st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
-else:
-    st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
+            tiempo_total_paradas = min_parada * datos['puntos']
+            tiempo_total_ruta = datos['drive_mins'] + tiempo_total_paradas
+            
+            c1, c2 = st.columns(2)
+            c1.metric("Puntos", datos['puntos'])
+            c2.metric("Distancia", f"{datos['dist_km']} km")
+            st.metric("⏱️ TIEMPO TOTAL ESTIMADO", value=f"{tiempo_total_ruta:.0f} min")
+            
+            with st.expander("Ver y Descargar Cronograma de esta Ruta"):
+                df_ruta_detallada = pd.DataFrame(cronograma_ruta)
+                st.dataframe(df_ruta_detallada, use_container_width=True)
+                
+                buffer_indiv = io.BytesIO()
+                with pd.ExcelWriter(buffer_indiv, engine='openpyxl') as writer:
+                    df_ruta_detallada.to_excel(writer, index=False, sheet_name=str(datos['ruta'])[:31])
+                
+                st.download_button(
+                    label=f"📥 Descargar Solo Ruta {datos['ruta']}",
+                    data=buffer_indiv.getvalue(),
+                    file_name=f"Cronograma_Ruta_{datos['ruta']}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"dl_{datos['ruta']}"
+                )
+
+    if len(todos_los_cronogramas) > 0:
+        st.markdown("---")
+        st.markdown("### 💾 Exportación Global")
+        df_global = pd.DataFrame(todos_los_cronogramas)
+        
+        buffer_global = io.BytesIO()
+        with pd.ExcelWriter(buffer_global, engine='openpyxl') as writer:
+            df_global.to_excel(writer, index=False, sheet_name='Cronograma Maestro')
+        
+        st.download_button(
+            label="📥 DESCARGAR CRONOGRAMA MAESTRO (Todas las rutas unificadas)",
+            data=buffer_global.getvalue(),
+            file_name="Cronograma_Logistica_Completo.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            use_container_width=True
+        )
