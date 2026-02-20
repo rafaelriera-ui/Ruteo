@@ -24,15 +24,23 @@ if 'calculo_terminado' not in st.session_state:
 st.sidebar.header("Carga de Datos")
 archivo_subido = st.sidebar.file_uploader("Sube tu archivo Excel", type=["xlsx", "xls"])
 
-# --- CLÁUSULA DE GUARDA: Si no hay archivo, frenamos la app aquí ---
+# --- CLÁUSULA DE GUARDA ---
 if archivo_subido is None:
     st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
-    st.stop() # Esto detiene la ejecución limpiamente, reemplazando al problemático "else:"
+    st.stop()
 
 # --- FUNCIONES ---
 def preparar_coordenadas(coord_str):
-    lat, lon = map(float, str(coord_str).strip().split(','))
-    return [lon, lat]
+    """Función a prueba de balas para leer coordenadas, ignora texto basura"""
+    try:
+        partes = str(coord_str).split(',')
+        if len(partes) >= 2:
+            lat = float(partes[0].strip())
+            lon = float(partes[1].strip())
+            return [lon, lat]
+        return None
+    except Exception:
+        return None
 
 def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, mostrar_por_defecto=True):
     coords_lat_lon = [(p[1], p[0]) for p in coordenadas_lon_lat]
@@ -62,7 +70,7 @@ def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, most
         ).add_to(capa)
         capa.add_to(mapa)
 
-# --- LÓGICA PRINCIPAL (Ahora mucho más plana y segura) ---
+# --- LÓGICA PRINCIPAL ---
 df = pd.read_excel(archivo_subido)
 df.columns = df.columns.str.strip() 
 
@@ -73,9 +81,14 @@ for col in columnas_requeridas:
         st.error(f"❌ No se encontró la columna '{col}' en tu archivo Excel.")
         st.stop()
 
-# Limpieza de datos
-df = df[df['Coordenadas'].astype(str).str.contains(',', na=False)].copy()
+# Limpieza de datos A PRUEBA DE BALAS
 df['Coords_Procesadas'] = df['Coordenadas'].apply(preparar_coordenadas)
+# Eliminamos cualquier fila que haya devuelto "None" por tener coordenadas inválidas
+df = df.dropna(subset=['Coords_Procesadas']).copy()
+
+if df.empty:
+    st.error("❌ No se encontraron coordenadas válidas en el archivo. Revisa el formato de la columna 'Coordenadas'.")
+    st.stop()
 
 st.sidebar.header("Gestión de Capas")
 dias_disponibles = df['Día'].unique()
