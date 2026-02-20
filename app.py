@@ -6,6 +6,7 @@ from streamlit_folium import st_folium
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 from haversine import haversine, Unit
+import io
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Gestor de Rutas Logísticas", layout="wide")
@@ -70,6 +71,7 @@ if archivo_subido is not None:
                 rutas_disponibles = df_dia['Ruta'].unique()
                 rutas_seleccionadas = st.sidebar.multiselect("Selecciona las Subcapas (Rutas) a calcular:", rutas_disponibles)
                 
+                # EL BOTÓN AHORA SOLO GUARDA DATOS EN LA MEMORIA
                 if st.button("🗺️ Calcular y Generar Mapa"):
                     if not rutas_seleccionadas:
                         st.warning("Selecciona al menos una ruta.")
@@ -77,10 +79,10 @@ if archivo_subido is not None:
                         with st.spinner("Calculando geozonas circulares y trazados óptimos..."):
                             lat_centro_ini = df_dia.iloc[0]['Coords_Procesadas'][1]
                             lon_centro_ini = df_dia.iloc[0]['Coords_Procesadas'][0]
-                            mapa = folium.Map(location=[lat_centro_ini, lon_centro_ini], zoom_start=11)
+                            mapa_calculado = folium.Map(location=[lat_centro_ini, lon_centro_ini], zoom_start=11)
                             
                             lista_dia_completo = df_dia['Coords_Procesadas'].tolist()
-                            dibujar_geozona_circular(lista_dia_completo, f"🌍 GEOZONA DÍA: {dia_seleccionado}", "black", mapa, mostrar_por_defecto=True)
+                            dibujar_geozona_circular(lista_dia_completo, f"🌍 GEOZONA DÍA: {dia_seleccionado}", "black", mapa_calculado, mostrar_por_defecto=True)
                             
                             colores_rutas = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'cadetblue']
                             datos_para_resumen = []
@@ -91,12 +93,12 @@ if archivo_subido is not None:
                                 color_actual = colores_rutas[i % len(colores_rutas)]
                                 num_puntos = len(df_ruta)
                                 
-                                dibujar_geozona_circular(lista_coordenadas, f"🗺️ Geozona Ruta: {ruta}", color_actual, mapa, mostrar_por_defecto=True)
+                                dibujar_geozona_circular(lista_coordenadas, f"🗺️ Geozona Ruta: {ruta}", color_actual, mapa_calculado, mostrar_por_defecto=True)
                                 
                                 deptos_en_ruta = df_ruta['Departamento'].unique() if 'Departamento' in df_ruta.columns else []
                                 for depto in deptos_en_ruta:
                                     coords_depto = df_ruta[df_ruta['Departamento'] == depto]['Coords_Procesadas'].tolist()
-                                    dibujar_geozona_circular(coords_depto, f"    📍 Geozona Depto: {depto} (Ruta {ruta})", color_actual, mapa, mostrar_por_defecto=False)
+                                    dibujar_geozona_circular(coords_depto, f"    📍 Geozona Depto: {depto} (Ruta {ruta})", color_actual, mapa_calculado, mostrar_por_defecto=False)
 
                                 url_matriz = 'https://api.openrouteservice.org/v2/matrix/driving-car'
                                 headers = {'Authorization': api_key, 'Content-Type': 'application/json'}
@@ -145,43 +147,79 @@ if archivo_subido is not None:
                                                 icono = folium.DivIcon(html=f"<div style='font-size: 10pt; font-weight: bold; color: white; background-color: {color_actual}; border-radius: 50%; width: 20px; height: 20px; text-align: center; border: 2px solid white; box-shadow: 2px 2px 4px rgba(0,0,0,0.4);'>{paso + 1}</div>")
                                                 folium.Marker([lat, lon], popup=popup_html, icon=icono).add_to(capa_trazado)
                                             
-                                            capa_trazado.add_to(mapa)
+                                            capa_trazado.add_to(mapa_calculado)
 
-                            folium.LayerControl(collapsed=False).add_to(mapa)
-
-                            col_mapa, col_resumen = st.columns([2, 1])
+                            folium.LayerControl(collapsed=False).add_to(mapa_calculado)
                             
-                            with col_mapa:
-                                st.subheader("Mapa Interactivo")
-                                st_folium(mapa, width=800, height=650, returned_objects=[])
-                                
-                            with col_resumen:
-                                st.subheader("Resumen y Tiempos")
-                                st.write("Ajusta los minutos de espera por parada para calcular el tiempo total.")
-                                
-                                for datos in datos_para_resumen:
-                                    st.markdown(f"---")
-                                    st.markdown(f"### 📍 Ruta: {datos['ruta']}")
-                                    
-                                    min_parada = st.number_input(
-                                        f"Minutos 'muertos' por parada en {datos['ruta']}:", 
-                                        min_value=0, value=0, step=1, 
-                                        key=f"stop_time_{datos['ruta']}"
-                                    )
-                                    
-                                    tiempo_total_paradas = min_parada * datos['puntos']
-                                    tiempo_total_ruta = datos['drive_mins'] + tiempo_total_paradas
-                                    
-                                    c1, c2 = st.columns(2)
-                                    c1.metric("Cantidad de Puntos", datos['puntos'])
-                                    c2.metric("Distancia Total", f"{datos['dist_km']} km")
-                                    
-                                    st.metric(
-                                        label="⏱️ TIEMPO TOTAL ESTIMADO", 
-                                        value=f"{tiempo_total_ruta:.0f} min",
-                                        delta=f"{datos['drive_mins']:.0f} min manejo + {tiempo_total_paradas} min espera",
-                                        delta_color="off"
-                                    )
+                            # GUARDAMOS LOS RESULTADOS EN LA MEMORIA DE LA SESIÓN
+                            st.session_state['mapa_guardado'] = mapa_calculado
+                            st.session_state['datos_resumen'] = datos_para_resumen
+
+                # ESTA SECCIÓN DIBUJA LA PANTALLA USANDO LA MEMORIA (Así no se borra al cambiar números)
+                if 'mapa_guardado' in st.session_state and 'datos_resumen' in st.session_state:
+                    col_mapa, col_resumen = st.columns([2, 1])
+                    
+                    with col_mapa:
+                        st.subheader("Mapa Interactivo")
+                        st_folium(st.session_state['mapa_guardado'], width=800, height=650, returned_objects=[])
+                        
+                    with col_resumen:
+                        st.subheader("Resumen y Tiempos")
+                        st.write("Ajusta los minutos de espera por parada:")
+                        
+                        datos_para_excel = [] # Lista que llenaremos para armar el Excel
+                        
+                        for datos in st.session_state['datos_resumen']:
+                            st.markdown(f"---")
+                            st.markdown(f"### 📍 Ruta: {datos['ruta']}")
+                            
+                            # Input interactivo
+                            min_parada = st.number_input(
+                                f"Minutos 'muertos' por parada en {datos['ruta']}:", 
+                                min_value=0, value=0, step=1, 
+                                key=f"stop_time_{datos['ruta']}"
+                            )
+                            
+                            tiempo_total_paradas = min_parada * datos['puntos']
+                            tiempo_total_ruta = datos['drive_mins'] + tiempo_total_paradas
+                            
+                            c1, c2 = st.columns(2)
+                            c1.metric("Cantidad de Puntos", datos['puntos'])
+                            c2.metric("Distancia Total", f"{datos['dist_km']} km")
+                            
+                            st.metric(
+                                label="⏱️ TIEMPO TOTAL ESTIMADO", 
+                                value=f"{tiempo_total_ruta:.0f} min",
+                                delta=f"{datos['drive_mins']:.0f} min manejo + {tiempo_total_paradas} min espera",
+                                delta_color="off"
+                            )
+                            
+                            # Guardamos la info calculada para el Excel
+                            datos_para_excel.append({
+                                "Ruta": datos['ruta'],
+                                "Puntos a visitar": datos['puntos'],
+                                "Distancia (Km)": datos['dist_km'],
+                                "Manejo Estimado (Minutos)": datos['drive_mins'],
+                                "Minutos de Espera Totales": tiempo_total_paradas,
+                                "Tiempo Total del Recorrido (Min)": tiempo_total_ruta
+                            })
+
+                        # BOTÓN DE DESCARGA EN EXCEL
+                        if len(datos_para_excel) > 0:
+                            st.markdown("---")
+                            df_excel = pd.DataFrame(datos_para_excel)
+                            
+                            # Crear el archivo Excel en la memoria invisible
+                            buffer = io.BytesIO()
+                            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                                df_excel.to_excel(writer, index=False, sheet_name='Tiempos Logistica')
+                            
+                            st.download_button(
+                                label="📥 Descargar Resumen en Excel",
+                                data=buffer.getvalue(),
+                                file_name="Resumen_Rutas_Tiempos.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
 
 else:
     st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
