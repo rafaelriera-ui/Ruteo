@@ -8,6 +8,7 @@ from ortools.constraint_solver import pywrapcp
 from haversine import haversine, Unit
 import io
 import datetime
+import re
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Gestor de Rutas Logísticas", layout="wide")
@@ -24,14 +25,12 @@ if 'calculo_terminado' not in st.session_state:
 st.sidebar.header("Carga de Datos")
 archivo_subido = st.sidebar.file_uploader("Sube tu archivo Excel", type=["xlsx", "xls"])
 
-# --- CLÁUSULA DE GUARDA ---
 if archivo_subido is None:
     st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
     st.stop()
 
 # --- FUNCIONES ---
 def preparar_coordenadas(coord_str):
-    """Función a prueba de balas para leer coordenadas, ignora texto basura"""
     try:
         partes = str(coord_str).split(',')
         if len(partes) >= 2:
@@ -42,9 +41,12 @@ def preparar_coordenadas(coord_str):
     except Exception:
         return None
 
+def limpiar_nombre_excel(nombre):
+    """Limpia caracteres inválidos para crear hojas de Excel sin error"""
+    return re.sub(r'[\\/*?:\[\]]', '_', str(nombre))[:31]
+
 def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, mostrar_por_defecto=True):
     coords_lat_lon = [(p[1], p[0]) for p in coordenadas_lon_lat]
-    
     if len(coords_lat_lon) > 0:
         avg_lat = sum([p[0] for p in coords_lat_lon]) / len(coords_lat_lon)
         avg_lon = sum([p[1] for p in coords_lat_lon]) / len(coords_lat_lon)
@@ -60,13 +62,8 @@ def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, most
 
         capa = folium.FeatureGroup(name=nombre_capa, show=mostrar_por_defecto)
         folium.Circle(
-            location=centro,
-            radius=radio_final,
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.15,
-            weight=2
+            location=centro, radius=radio_final, color=color,
+            fill=True, fill_color=color, fill_opacity=0.15, weight=2
         ).add_to(capa)
         capa.add_to(mapa)
 
@@ -74,26 +71,28 @@ def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, most
 df = pd.read_excel(archivo_subido)
 df.columns = df.columns.str.strip() 
 
-# Validaciones de columnas
-columnas_requeridas = ['Coordenadas', 'Día', 'Ruta']
-for col in columnas_requeridas:
+for col in ['Coordenadas', 'Día', 'Ruta']:
     if col not in df.columns:
         st.error(f"❌ No se encontró la columna '{col}' en tu archivo Excel.")
         st.stop()
 
-# Limpieza de datos A PRUEBA DE BALAS
 df['Coords_Procesadas'] = df['Coordenadas'].apply(preparar_coordenadas)
-# Eliminamos cualquier fila que haya devuelto "None" por tener coordenadas inválidas
 df = df.dropna(subset=['Coords_Procesadas']).copy()
 
 if df.empty:
-    st.error("❌ No se encontraron coordenadas válidas en el archivo. Revisa el formato de la columna 'Coordenadas'.")
+    st.error("❌ No se encontraron coordenadas válidas en el archivo.")
     st.stop()
 
 st.sidebar.header("Gestión de Capas")
 dias_disponibles = df['Día'].unique()
-dia_seleccionado = st.sidebar.selectbox("Selecciona la Capa Principal (Día):", dias_disponibles)
-df_dia = df[df['Día'] == dia_seleccionado]
+# MEJORA 1: Multiselect para Días
+dias_seleccionados = st.sidebar.multiselect("Selecciona la Capa Principal (Día):", dias_disponibles, default=[dias_disponibles[0]] if len(dias_disponibles)>0 else None)
+
+if not dias_seleccionados:
+    st.sidebar.warning("Selecciona al menos un Día.")
+    st.stop()
+
+df_dia = df[df['Día'].isin(dias_seleccionados)]
 
 rutas_disponibles = df_dia['Ruta'].unique()
 rutas_seleccionadas = st.sidebar.multiselect("Selecciona las Subcapas (Rutas) a calcular:", rutas_disponibles)
@@ -109,8 +108,11 @@ if st.sidebar.button("🗺️ Calcular y Generar Mapa", type="primary"):
         lon_centro_ini = df_dia.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro_ini, lon_centro_ini], zoom_start=11)
         
-        lista_dia_completo = df_dia['Coords_Procesadas'].tolist()
-        dibujar_geozona_circular(lista_dia_completo, f"🌍 GEOZONA DÍA: {dia_seleccionado}", "black", mapa_calculado, mostrar_por_defecto=True)
+        # Geozonas para TODOS los días seleccionados
+        for dia in dias_seleccionados:
+            df_este_dia = df_dia[df_dia['Día'] == dia]
+            lista_este_dia = df_este_dia['Coords_Procesadas'].tolist()
+            dibujar_geozona_circular(lista_este_dia, f"🌍 GEOZONA DÍA: {dia}", "black", mapa_calculado, mostrar_por_defecto=True)
         
         colores_rutas = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'cadetblue']
         datos_para_resumen = []
@@ -191,92 +193,88 @@ if st.sidebar.button("🗺️ Calcular y Generar Mapa", type="primary"):
                         
                         capa_trazado.add_to(mapa_calculado)
 
-        folium.LayerControl(collapsed=False).add_to(mapa_calculado)
+        # MEJORA 2: El control de capas nace cerrado para no bloquear la pantalla
+        folium.LayerControl(collapsed=True).add_to(mapa_calculado)
         
         st.session_state['mapa_guardado'] = mapa_calculado
         st.session_state['datos_resumen'] = datos_para_resumen
         st.session_state['calculo_terminado'] = True
 
-# --- PANTALLA FIJA (Se lee desde la memoria) ---
+# --- PANTALLA FIJA ---
 if st.session_state['calculo_terminado']:
-    col_mapa, col_resumen = st.columns([2, 1])
+    col_mapa, col_resumen = st.columns([1.8, 1.2])
     
     with col_mapa:
-        st.subheader("Mapa Interactivo")
         st_folium(st.session_state['mapa_guardado'], width=800, height=750, returned_objects=[], key="mapa_fijo")
         
     with col_resumen:
-        st.subheader("Cronograma Dinámico")
-        st.write("Ajusta tiempos para recalcular las horas de llegada.")
-        
+        st.markdown("### Cronograma Dinámico")
         todos_los_cronogramas = [] 
         
         for datos in st.session_state['datos_resumen']:
-            st.markdown(f"---")
-            st.markdown(f"### 📍 Ruta: {datos['ruta']}")
-            
-            col_t1, col_t2 = st.columns(2)
-            with col_t1:
-                hora_inicio = st.time_input(f"Salida ({datos['ruta']})", value=datetime.time(8, 0), key=f"start_{datos['ruta']}")
-            with col_t2:
-                min_parada = st.number_input(f"Espera (min)", min_value=0, value=0, step=1, key=f"stop_{datos['ruta']}")
-            
-            fecha_base = datetime.datetime.combine(datetime.date.today(), hora_inicio)
-            tiempo_actual = fecha_base
-            salida_anterior = fecha_base
-            cronograma_ruta = []
-            
-            for idx, parada in enumerate(datos['paradas']):
-                if idx == 0:
-                    llegada = tiempo_actual
-                else:
-                    segundos_manejo = datos['segmentos'][idx-1]['duration'] if len(datos['segmentos']) > idx-1 else 0
-                    llegada = salida_anterior + datetime.timedelta(seconds=segundos_manejo)
+            with st.container():
+                st.markdown(f"**📍 Ruta: {datos['ruta']}** | 📦 {datos['puntos']} paradas | 🛣️ {datos['dist_km']} km")
                 
-                salida = llegada + datetime.timedelta(minutes=min_parada)
-                salida_anterior = salida 
+                # MEJORA 4: Diseño Minimalista en una sola fila
+                c1, c2, c3 = st.columns([1.2, 1, 1.2])
+                with c1:
+                    # MEJORA 3: Horario 09:00 por defecto
+                    hora_inicio = st.time_input("Salida", value=datetime.time(9, 0), key=f"start_{datos['ruta']}")
+                with c2:
+                    min_parada = st.number_input("Espera (min)", min_value=0, value=0, step=1, key=f"stop_{datos['ruta']}")
                 
-                cronograma_ruta.append({
-                    "Día": parada['Día'],
-                    "Ruta": parada['Ruta'],
-                    "Departamento": parada['Departamento'],
-                    "Lugar": parada['Lugar'],
-                    "Coordenadas": parada['Coordenadas'],
-                    "Llegada": llegada.strftime("%H:%M"),
-                    "Salida": salida.strftime("%H:%M")
-                })
+                tiempo_total_paradas = min_parada * datos['puntos']
+                tiempo_total_ruta = datos['drive_mins'] + tiempo_total_paradas
                 
-            todos_los_cronogramas.extend(cronograma_ruta)
+                with c3:
+                    st.metric("Total", f"{tiempo_total_ruta:.0f} min")
+                
+                # Cálculos internos del cronograma
+                fecha_base = datetime.datetime.combine(datetime.date.today(), hora_inicio)
+                tiempo_actual = fecha_base
+                salida_anterior = fecha_base
+                cronograma_ruta = []
+                
+                for idx, parada in enumerate(datos['paradas']):
+                    if idx == 0:
+                        llegada = tiempo_actual
+                    else:
+                        segundos_manejo = datos['segmentos'][idx-1]['duration'] if len(datos['segmentos']) > idx-1 else 0
+                        llegada = salida_anterior + datetime.timedelta(seconds=segundos_manejo)
+                    
+                    salida = llegada + datetime.timedelta(minutes=min_parada)
+                    salida_anterior = salida 
+                    
+                    cronograma_ruta.append({
+                        "Día": parada['Día'], "Ruta": parada['Ruta'],
+                        "Departamento": parada['Departamento'], "Lugar": parada['Lugar'],
+                        "Coordenadas": parada['Coordenadas'], "Llegada": llegada.strftime("%H:%M"),
+                        "Salida": salida.strftime("%H:%M")
+                    })
+                    
+                todos_los_cronogramas.extend(cronograma_ruta)
 
-            tiempo_total_paradas = min_parada * datos['puntos']
-            tiempo_total_ruta = datos['drive_mins'] + tiempo_total_paradas
-            
-            c1, c2 = st.columns(2)
-            c1.metric("Puntos", datos['puntos'])
-            c2.metric("Distancia", f"{datos['dist_km']} km")
-            st.metric("⏱️ TIEMPO TOTAL ESTIMADO", value=f"{tiempo_total_ruta:.0f} min")
-            
-            with st.expander("Ver y Descargar Cronograma de esta Ruta"):
-                df_ruta_detallada = pd.DataFrame(cronograma_ruta)
-                st.dataframe(df_ruta_detallada, use_container_width=True)
-                
-                buffer_indiv = io.BytesIO()
-                with pd.ExcelWriter(buffer_indiv, engine='openpyxl') as writer:
-                    df_ruta_detallada.to_excel(writer, index=False, sheet_name=str(datos['ruta'])[:31])
-                
-                st.download_button(
-                    label=f"📥 Descargar Solo Ruta {datos['ruta']}",
-                    data=buffer_indiv.getvalue(),
-                    file_name=f"Cronograma_Ruta_{datos['ruta']}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key=f"dl_{datos['ruta']}"
-                )
+                with st.expander("Ver Detalle / Descargar"):
+                    df_ruta_detallada = pd.DataFrame(cronograma_ruta)
+                    st.dataframe(df_ruta_detallada, use_container_width=True)
+                    
+                    buffer_indiv = io.BytesIO()
+                    with pd.ExcelWriter(buffer_indiv, engine='openpyxl') as writer:
+                        # MEJORA 5: Limpieza de nombres problemáticos para el Excel
+                        nombre_hoja_seguro = limpiar_nombre_excel(datos['ruta'])
+                        df_ruta_detallada.to_excel(writer, index=False, sheet_name=nombre_hoja_seguro)
+                    
+                    st.download_button(
+                        label="📥 Descargar", data=buffer_indiv.getvalue(),
+                        file_name=f"Cronograma_{limpiar_nombre_excel(datos['ruta'])}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"dl_{datos['ruta']}", use_container_width=True
+                    )
+                st.divider()
 
     if len(todos_los_cronogramas) > 0:
-        st.markdown("---")
         st.markdown("### 💾 Exportación Global")
         df_global = pd.DataFrame(todos_los_cronogramas)
-        
         buffer_global = io.BytesIO()
         with pd.ExcelWriter(buffer_global, engine='openpyxl') as writer:
             df_global.to_excel(writer, index=False, sheet_name='Cronograma Maestro')
@@ -286,6 +284,5 @@ if st.session_state['calculo_terminado']:
             data=buffer_global.getvalue(),
             file_name="Cronograma_Logistica_Completo.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True
+            type="primary", use_container_width=True
         )
