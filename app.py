@@ -5,7 +5,7 @@ import folium
 from streamlit_folium import st_folium
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
-from scipy.spatial import ConvexHull
+from haversine import haversine, Unit
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Gestor de Rutas Logísticas", layout="wide")
@@ -19,26 +19,45 @@ st.sidebar.header("Carga de Datos")
 archivo_subido = st.sidebar.file_uploader("Sube tu archivo Excel", type=["xlsx", "xls"])
 
 def preparar_coordenadas(coord_str):
+    # Devuelve [Lon, Lat] para ORS y GeoJSON
     lat, lon = map(float, str(coord_str).strip().split(','))
     return [lon, lat]
 
-# --- FUNCIÓN PARA DIBUJAR GEOZONAS (Convex Hull) ---
-def dibujar_geozona(coordenadas_lon_lat, nombre_capa, color, mapa, mostrar_por_defecto=True):
-    capa = folium.FeatureGroup(name=nombre_capa, show=mostrar_por_defecto)
+# --- FUNCIÓN NUEVA: DIBUJAR GEOZONA CIRCULAR ---
+def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, mostrar_por_defecto=True):
+    # Convertimos a (Lat, Lon) para los cálculos de distancia
+    coords_lat_lon = [(p[1], p[0]) for p in coordenadas_lon_lat]
     
-    if len(coordenadas_lon_lat) >= 3:
-        hull = ConvexHull(coordenadas_lon_lat)
-        puntos_perimetro = [coordenadas_lon_lat[i] for i in hull.vertices]
-        puntos_folium = [[p[1], p[0]] for p in puntos_perimetro] 
-        folium.Polygon(locations=puntos_folium, color=color, fill=True, fill_opacity=0.15, weight=2).add_to(capa)
-    elif len(coordenadas_lon_lat) == 2:
-        puntos_folium = [[p[1], p[0]] for p in coordenadas_lon_lat]
-        folium.PolyLine(locations=puntos_folium, color=color, weight=15, opacity=0.3).add_to(capa)
-    elif len(coordenadas_lon_lat) == 1:
-        p = coordenadas_lon_lat[0]
-        folium.Circle(location=[p[1], p[0]], radius=1500, color=color, fill=True, fill_opacity=0.15).add_to(capa)
+    if len(coords_lat_lon) > 0:
+        # 1. Calcular el Centro geográfico (promedio de lats y lons)
+        avg_lat = sum([p[0] for p in coords_lat_lon]) / len(coords_lat_lon)
+        avg_lon = sum([p[1] for p in coords_lat_lon]) / len(coords_lat_lon)
+        centro = (avg_lat, avg_lon)
+
+        # 2. Calcular el Radio máximo (distancia al punto más lejano del centro)
+        max_radio_metros = 0
+        for punto in coords_lat_lon:
+            # Usamos haversine para distancia real en metros
+            dist = haversine(centro, punto, unit=Unit.METERS)
+            if dist > max_radio_metros:
+                max_radio_metros = dist
         
-    capa.add_to(mapa)
+        # Agregamos un pequeño margen (5%) para que el punto no quede en el borde exacto
+        # Si es un solo punto, radio mínimo de 200m
+        radio_final = max_radio_metros * 1.05 if max_radio_metros > 10 else 200
+
+        # 3. Dibujar el círculo
+        capa = folium.FeatureGroup(name=nombre_capa, show=mostrar_por_defecto)
+        folium.Circle(
+            location=centro,
+            radius=radio_final,
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.15,
+            weight=2
+        ).add_to(capa)
+        capa.add_to(mapa)
 
 # --- LÓGICA PRINCIPAL ---
 if archivo_subido is not None:
@@ -63,33 +82,35 @@ if archivo_subido is not None:
                     if not rutas_seleccionadas:
                         st.warning("Selecciona al menos una ruta.")
                     else:
-                        with st.spinner("Trazando calles y calculando geozonas..."):
-                            lat_centro = df_dia.iloc[0]['Coords_Procesadas'][1]
-                            lon_centro = df_dia.iloc[0]['Coords_Procesadas'][0]
-                            mapa = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
+                        with st.spinner("Calculando geozonas circulares y trazados óptimos..."):
+                            # Usamos el primer punto del día para centrar el mapa inicial
+                            lat_centro_ini = df_dia.iloc[0]['Coords_Procesadas'][1]
+                            lon_centro_ini = df_dia.iloc[0]['Coords_Procesadas'][0]
+                            mapa = folium.Map(location=[lat_centro_ini, lon_centro_ini], zoom_start=11)
                             
-                            # GEOZONA CAPA PRINCIPAL
+                            # 1. GEOZONA CAPA PRINCIPAL (Día completo) - CÍRCULO
                             lista_dia_completo = df_dia['Coords_Procesadas'].tolist()
-                            dibujar_geozona(lista_dia_completo, f"🌍 GEOZONA DÍA: {dia_seleccionado}", "black", mapa, mostrar_por_defecto=True)
+                            dibujar_geozona_circular(lista_dia_completo, f"🌍 GEOZONA DÍA: {dia_seleccionado}", "black", mapa, mostrar_por_defecto=True)
                             
                             colores_rutas = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'cadetblue']
-                            resumen_resultados = []
+                            datos_para_resumen = []
 
                             for i, ruta in enumerate(rutas_seleccionadas):
                                 df_ruta = df_dia[df_dia['Ruta'] == ruta].copy().reset_index(drop=True)
                                 lista_coordenadas = df_ruta['Coords_Procesadas'].tolist()
                                 color_actual = colores_rutas[i % len(colores_rutas)]
+                                num_puntos = len(df_ruta)
                                 
-                                # GEOZONA SUBCAPA
-                                dibujar_geozona(lista_coordenadas, f"🗺️ Geozona Ruta: {ruta}", color_actual, mapa, mostrar_por_defecto=True)
+                                # 2. GEOZONA SUBCAPA (Ruta) - CÍRCULO
+                                dibujar_geozona_circular(lista_coordenadas, f"🗺️ Geozona Ruta: {ruta}", color_actual, mapa, mostrar_por_defecto=True)
                                 
-                                # GEOZONAS SUBSUBCAPAS
+                                # 3. GEOZONAS SUBSUBCAPAS (Departamentos) - CÍRCULOS (Nacen apagados)
                                 deptos_en_ruta = df_ruta['Departamento'].unique() if 'Departamento' in df_ruta.columns else []
                                 for depto in deptos_en_ruta:
                                     coords_depto = df_ruta[df_ruta['Departamento'] == depto]['Coords_Procesadas'].tolist()
-                                    dibujar_geozona(coords_depto, f"    📍 Geozona Depto: {depto} (Ruta {ruta})", color_actual, mapa, mostrar_por_defecto=False)
+                                    dibujar_geozona_circular(coords_depto, f"    📍 Geozona Depto: {depto} (Ruta {ruta})", color_actual, mapa, mostrar_por_defecto=False)
 
-                                # CÁLCULO DE RUTA
+                                # CÁLCULO DE RUTA (Matriz + OR-Tools)
                                 url_matriz = 'https://api.openrouteservice.org/v2/matrix/driving-car'
                                 headers = {'Authorization': api_key, 'Content-Type': 'application/json'}
                                 response_matriz = requests.post(url_matriz, json={"locations": lista_coordenadas, "metrics": ["distance"]}, headers=headers)
@@ -113,40 +134,78 @@ if archivo_subido is not None:
                                             index = solution.Value(routing.NextVar(index))
                                         
                                         coords_ordenadas = [lista_coordenadas[j] for j in nodos_ordenados]
+                                        # Obtener el trazado final
                                         response_rutas = requests.post('https://api.openrouteservice.org/v2/directions/driving-car/geojson', json={"coordinates": coords_ordenadas}, headers=headers)
                                         
                                         if response_rutas.status_code == 200:
                                             geojson_ruta = response_rutas.json()
                                             propiedades = geojson_ruta['features'][0]['properties']['summary']
                                             
-                                            resumen_resultados.append({
-                                                "Ruta": ruta,
-                                                "Cant. Puntos": len(df_ruta),
-                                                "Distancia (km)": round(propiedades['distance'] / 1000, 2),
-                                                "Tiempo Estimado (min)": round(propiedades['duration'] / 60, 0)
+                                            # Guardamos datos para el resumen interactivo
+                                            datos_para_resumen.append({
+                                                "ruta": ruta,
+                                                "puntos": num_puntos,
+                                                "dist_km": round(propiedades['distance'] / 1000, 2),
+                                                "drive_mins": round(propiedades['duration'] / 60, 0),
+                                                "color": color_actual
                                             })
                                             
+                                            # Dibujar Trazado y Marcadores
                                             capa_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta}")
-                                            folium.GeoJson(geojson_ruta, style_function=lambda x, c=color_actual: {'color': c, 'weight': 5, 'opacity': 0.8}).add_to(capa_trazado)
+                                            folium.GeoJson(geojson_ruta, style_function=lambda x, c=color_actual: {'color': c, 'weight': 4, 'opacity': 0.9}).add_to(capa_trazado)
                                             
                                             for paso, nodo in enumerate(nodos_ordenados):
                                                 fila = df_ruta.iloc[nodo]
                                                 lat, lon = fila['Coords_Procesadas'][1], fila['Coords_Procesadas'][0]
                                                 popup_html = f"<b>Orden:</b> {paso+1}<br><b>Día:</b> {fila.get('Día', '')}<br><b>Ruta:</b> {fila.get('Ruta', '')}<br><b>Depto:</b> {fila.get('Departamento', '')}<br><b>Lugar:</b> {fila.get('Lugar', '')}"
-                                                icono = folium.DivIcon(html=f"<div style='font-size: 10pt; font-weight: bold; color: white; background-color: {color_actual}; border-radius: 50%; width: 20px; height: 20px; text-align: center; border: 2px solid white;'>{paso + 1}</div>")
+                                                icono = folium.DivIcon(html=f"<div style='font-size: 10pt; font-weight: bold; color: white; background-color: {color_actual}; border-radius: 50%; width: 20px; height: 20px; text-align: center; border: 2px solid white; box-shadow: 2px 2px 4px rgba(0,0,0,0.4);'>{paso + 1}</div>")
                                                 folium.Marker([lat, lon], popup=popup_html, icon=icono).add_to(capa_trazado)
                                             
                                             capa_trazado.add_to(mapa)
 
                             folium.LayerControl(collapsed=False).add_to(mapa)
 
-                            col1, col2 = st.columns([2, 1])
-                            with col1:
-                                st.markdown("### Mapa Interactivo")
-                                st_folium(mapa, width=800, height=600, returned_objects=[])
-                            with col2:
-                                st.markdown("### Resumen Operativo")
-                                st.dataframe(pd.DataFrame(resumen_resultados))
+                            # --- VISUALIZACIÓN FINAL ---
+                            col_mapa, col_resumen = st.columns([2, 1])
+                            
+                            with col_mapa:
+                                st.subheader("Mapa Interactivo")
+                                st_folium(mapa, width=800, height=650, returned_objects=[])
+                                
+                            with col_resumen:
+                                st.subheader("Resumen y Tiempos")
+                                st.write("Ajusta los minutos de espera por parada para calcular el tiempo total.")
+                                
+                                # Generamos un bloque interactivo por cada ruta calculada
+                                for datos in datos_para_resumen:
+                                    st.markdown(f"""---""")
+                                    st.markdown(f"### 📍 Ruta: {datos['ruta']}")
+                                    
+                                    # Input interactivo para tiempo de parada (default 0)
+                                    min_parada = st.number_input(
+                                        f"Minutos 'muertos' por parada en {datos['ruta']}:", 
+                                        min_value=0, value=0, step=1, 
+                                        key=f"stop_time_{datos['ruta']}" # Key única para que no se mezclen
+                                    )
+                                    
+                                    # Cálculos finales
+                                    tiempo_total_paradas = min_parada * datos['puntos']
+                                    tiempo_total_ruta = datos['drive_mins'] + tiempo_total_paradas
+                                    
+                                    # Métricas visuales
+                                    c1, c2 = st.columns(2)
+                                    c1.metric("Cantidad de Puntos", datos['puntos'])
+                                    c2.metric("Distancia Total", f"{datos['dist_km']} km")
+                                    
+                                    st.metric(
+                                        label="⏱️ TIEMPO TOTAL ESTIMADO", 
+                                        value=f"{tiempo_total_ruta:.0f} min",
+                                        delta=f"{datos['drive_mins']:.0f} min manejo + {tiempo_total_paradas} min espera",
+                                        delta_color="off" # Color neutro para el detalle
+                                    )
+
+else:
+    st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
 
 else:
     st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
