@@ -182,12 +182,11 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     coords_ordenadas = lista_coords
                 
                 else: 
-                    # --- MEJORA: RADIOS INFINITOS EN LA MATRIZ (-1) ---
+                    # --- CORRECCIÓN: La Matriz NO soporta 'radiuses', volvemos a la petición estándar ---
                     url_matrix = 'https://api.openrouteservice.org/v2/matrix/driving-car'
                     body_matrix = {
                         "locations": lista_coords, 
-                        "metrics": ["distance"],
-                        "radiuses": [-1] * len(lista_coords) # <- Búsqueda infinita
+                        "metrics": ["distance"]
                     }
                     resp_matrix = requests.post(url_matrix, json=body_matrix, headers=headers)
                     
@@ -230,14 +229,14 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             st.error(f"No se encontró solución de optimización para {ruta}")
                             continue
                     else:
-                        st.error(f"Error API Matriz en {ruta}: {resp_matrix.text}")
+                        st.error(f"Error API Matriz en {ruta}: Verifica que todos los puntos estén cerca de calles válidas. Error: {resp_matrix.text}")
                         continue
 
-                # --- MEJORA: RADIOS INFINITOS EN EL TRAZADO (-1) ---
+                # --- TRAZADO: Aquí SÍ mantenemos 'radiuses' para que dibuje sin importar la distancia ---
                 url_dirs = 'https://api.openrouteservice.org/v2/directions/driving-car/geojson'
                 body_dirs = {
                     "coordinates": coords_ordenadas,
-                    "radiuses": [-1] * len(coords_ordenadas) # <- Búsqueda infinita
+                    "radiuses": [-1] * len(coords_ordenadas) # <- Búsqueda infinita (SÍ funciona en Directions)
                 }
                 resp_dirs = requests.post(url_dirs, json=body_dirs, headers=headers)
                 
