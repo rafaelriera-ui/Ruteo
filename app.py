@@ -9,6 +9,7 @@ from haversine import haversine, Unit
 import io
 import datetime
 import re
+import time  # <-- NUEVA LIBRERÍA PARA CONTROLAR LA VELOCIDAD
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Gestor de Rutas Logísticas", layout="wide")
@@ -136,7 +137,7 @@ if tipo_ruteo == "Ruteo Optimizado (IA)":
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Procesando rutas, distancias y tiempos..."):
+    with st.spinner("Procesando rutas... (esto puede tomar unos segundos por ruta para no saturar el servidor)"):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -221,7 +222,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             st.error(f"No se encontró solución de optimización para {ruta}")
                             continue
                     else:
-                        st.error(f"Error API Matriz en {ruta}: {resp_matrix.text}")
+                        st.error(f"Error API Matriz en {ruta} (¿Más de 50 paradas?): {resp_matrix.text}")
                         continue
 
                 url_dirs = 'https://api.openrouteservice.org/v2/directions/driving-car/geojson'
@@ -264,7 +265,10 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     
                     fg_trazado.add_to(mapa_calculado)
                 else:
-                    st.error(f"Error trazando las calles de {ruta}")
+                    st.error(f"Error trazando calles de {ruta} (¿Más de 50 paradas?): {resp_dirs.text}")
+
+                # --- EL RESPIRADOR: Esperamos 3 segundos antes de la siguiente ruta ---
+                time.sleep(3)
 
         folium.LayerControl(collapsed=True).add_to(mapa_calculado)
         st.session_state['mapa_guardado'] = mapa_calculado
