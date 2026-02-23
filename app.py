@@ -85,7 +85,6 @@ if df.empty:
 # --- BARRA LATERAL: FILTROS ---
 st.sidebar.header("1. Filtros de Selección")
 
-# Filtro Días
 dias_disponibles = df['Día'].unique().tolist()
 todos_dias = st.sidebar.checkbox("✔️ Todos los Días", value=True)
 if todos_dias:
@@ -97,7 +96,6 @@ if not dias_seleccionados:
     st.sidebar.warning("Selecciona al menos un Día.")
     st.stop()
 
-# Filtro Rutas
 df_filtrado_dias = df[df['Día'].isin(dias_seleccionados)]
 rutas_disponibles = df_filtrado_dias['Ruta'].unique().tolist()
 todas_rutas = st.sidebar.checkbox("✔️ Todas las Rutas", value=True)
@@ -152,7 +150,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
         datos_para_resumen = []
         color_idx = 0
 
-        # PROCESO PRINCIPAL
         for dia in dias_seleccionados:
             for ruta in rutas_seleccionadas:
                 df_ruta = df[(df['Día'] == dia) & (df['Ruta'] == ruta)].copy().reset_index(drop=True)
@@ -172,10 +169,8 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     c_depto = df_ruta[df_ruta['Departamento'] == d]['Coords_Procesadas'].tolist()
                     dibujar_geozona_circular(c_depto, f"📍 {d} ({ruta})", color_actual, mapa_calculado, False)
 
-                # --- CONFIGURACIÓN DE ACCESO API --- (SOLUCIÓN AL ERROR)
                 headers = {'Authorization': api_key, 'Content-Type': 'application/json'}
                 
-                # --- LÓGICA DE RUTEO ---
                 nodos_ordenados = []
                 coords_ordenadas = []
 
@@ -183,7 +178,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     nodos_ordenados = list(range(len(df_ruta)))
                     coords_ordenadas = lista_coords
                 
-                else: # Ruteo Optimizado
+                else: 
                     url_matrix = 'https://api.openrouteservice.org/v2/matrix/driving-car'
                     resp_matrix = requests.post(url_matrix, json={"locations": lista_coords, "metrics": ["distance"]}, headers=headers)
                     
@@ -229,7 +224,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         st.error(f"Error API Matriz en {ruta}: {resp_matrix.text}")
                         continue
 
-                # --- TRAZADO DETALLADO (DIRECTIONS API) ---
                 url_dirs = 'https://api.openrouteservice.org/v2/directions/driving-car/geojson'
                 body_dirs = {"coordinates": coords_ordenadas}
                 resp_dirs = requests.post(url_dirs, json=body_dirs, headers=headers)
@@ -258,7 +252,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         "segmentos": segments
                     })
                     
-                    # Capa del Trazado Visual y Marcadores
                     fg_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta}")
                     folium.GeoJson(geojson, style_function=lambda x, c=color_actual: {'color':c, 'weight':4, 'opacity':0.8}).add_to(fg_trazado)
                     
@@ -302,21 +295,28 @@ if st.session_state['calculo_terminado']:
                 
                 t_actual = datetime.datetime.combine(datetime.date.today(), h_inicio)
                 dist_acum = 0.0
+                mins_acum = 0.0
                 rows_excel = []
                 
                 for i, p in enumerate(d['paradas']):
                     dist_tramo = 0.0
+                    mins_tramo = 0.0
+                    
                     if i > 0:
                         secs = d['segmentos'][i-1]['duration'] if i-1 < len(d['segmentos']) else 0
                         meters = d['segmentos'][i-1]['distance'] if i-1 < len(d['segmentos']) else 0
                         dist_tramo = round(meters/1000, 2)
+                        mins_tramo = (secs / 60.0) + espera
                         t_actual += datetime.timedelta(seconds=secs)
+                    else:
+                        mins_tramo = espera
                     
                     llegada = t_actual
                     salida = llegada + datetime.timedelta(minutes=espera)
                     t_actual = salida
                     
                     dist_acum += dist_tramo
+                    mins_acum += mins_tramo
                     
                     rows_excel.append({
                         "Orden": i+1,
@@ -325,6 +325,8 @@ if st.session_state['calculo_terminado']:
                         "Coordenadas": p['Coordenadas'],
                         "Llegada": llegada.strftime("%H:%M"),
                         "Salida": salida.strftime("%H:%M"),
+                        "Minutos Tramo": round(mins_tramo, 0),
+                        "Minutos Acumulados": round(mins_acum, 0),
                         "Km Tramo": dist_tramo,
                         "Km Acumulados": round(dist_acum, 2)
                     })
@@ -333,7 +335,7 @@ if st.session_state['calculo_terminado']:
                 
                 with st.expander("Ver Detalle"):
                     df_view = pd.DataFrame(rows_excel)
-                    st.dataframe(df_view[['Orden','Lugar','Llegada','Salida','Km Acumulados']], use_container_width=True)
+                    st.dataframe(df_view[['Orden','Lugar','Llegada','Salida','Minutos Tramo','Minutos Acumulados','Km Acumulados']], use_container_width=True)
                     
                     bio = io.BytesIO()
                     with pd.ExcelWriter(bio, engine='openpyxl') as w:
