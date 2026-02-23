@@ -9,7 +9,7 @@ from haversine import haversine, Unit
 import io
 import datetime
 import re
-import time  # <-- NUEVA LIBRERÍA PARA CONTROLAR LA VELOCIDAD
+import time 
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Gestor de Rutas Logísticas", layout="wide")
@@ -119,21 +119,25 @@ tipo_ruteo = st.sidebar.radio(
 )
 
 punto_final_fijo = False
-indice_punto_final = None
+indices_puntos_finales = {}
 
 if tipo_ruteo == "Ruteo Optimizado (IA)":
     activar_punto_final = st.sidebar.checkbox("🏁 Definir Punto Final específico")
     
     if activar_punto_final:
         punto_final_fijo = True
-        if len(rutas_seleccionadas) == 1 and len(dias_seleccionados) == 1:
-            df_unicaruta = df_filtrado_dias[df_filtrado_dias['Ruta'] == rutas_seleccionadas[0]].reset_index(drop=True)
-            opciones_lugar = df_unicaruta['Lugar'].tolist()
-            lugar_final = st.sidebar.selectbox("Selecciona el destino final:", opciones_lugar, index=len(opciones_lugar)-1)
-            indice_punto_final = df_unicaruta[df_unicaruta['Lugar'] == lugar_final].index[0]
-        else:
-            st.sidebar.info("ℹ️ Al procesar múltiples rutas, se usará el **último punto** de la lista de Excel de cada ruta como destino final.")
-            indice_punto_final = -1 
+        st.sidebar.markdown("**Selecciona el destino final para cada ruta:**")
+        
+        # Generar un selectbox para CADA ruta seleccionada
+        for dia in dias_seleccionados:
+            for ruta in rutas_seleccionadas:
+                df_unicaruta = df_filtrado_dias[(df_filtrado_dias['Día'] == dia) & (df_filtrado_dias['Ruta'] == ruta)].reset_index(drop=True)
+                if not df_unicaruta.empty:
+                    opciones_lugar = df_unicaruta['Lugar'].tolist()
+                    id_ruta = f"{dia} - {ruta}"
+                    lugar_final = st.sidebar.selectbox(f"Destino para {id_ruta}:", opciones_lugar, index=len(opciones_lugar)-1, key=f"end_{id_ruta}")
+                    # Guardamos el índice del lugar seleccionado para esta ruta específica
+                    indices_puntos_finales[id_ruta] = df_unicaruta[df_unicaruta['Lugar'] == lugar_final].index[0]
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
@@ -188,7 +192,8 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         num_locs = len(matriz)
                         
                         if punto_final_fijo:
-                            end_node = indice_punto_final if indice_punto_final != -1 else num_locs - 1
+                            # Busca el destino que el usuario eligió para ESTA ruta en específico (por defecto usa el último si no lo encuentra)
+                            end_node = indices_puntos_finales.get(id_unico, num_locs - 1)
                             manager = pywrapcp.RoutingIndexManager(num_locs, 1, [0], [int(end_node)])
                         else:
                             manager = pywrapcp.RoutingIndexManager(num_locs, 1, 0)
