@@ -128,7 +128,6 @@ if tipo_ruteo == "Ruteo Optimizado (IA)":
         punto_final_fijo = True
         st.sidebar.markdown("**Selecciona el destino final para cada ruta:**")
         
-        # Generar un selectbox para CADA ruta seleccionada
         for dia in dias_seleccionados:
             for ruta in rutas_seleccionadas:
                 df_unicaruta = df_filtrado_dias[(df_filtrado_dias['Día'] == dia) & (df_filtrado_dias['Ruta'] == ruta)].reset_index(drop=True)
@@ -136,7 +135,6 @@ if tipo_ruteo == "Ruteo Optimizado (IA)":
                     opciones_lugar = df_unicaruta['Lugar'].tolist()
                     id_ruta = f"{dia} - {ruta}"
                     lugar_final = st.sidebar.selectbox(f"Destino para {id_ruta}:", opciones_lugar, index=len(opciones_lugar)-1, key=f"end_{id_ruta}")
-                    # Guardamos el índice del lugar seleccionado para esta ruta específica
                     indices_puntos_finales[id_ruta] = df_unicaruta[df_unicaruta['Lugar'] == lugar_final].index[0]
 
 # --- BOTÓN DE CÁLCULO ---
@@ -184,15 +182,20 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     coords_ordenadas = lista_coords
                 
                 else: 
+                    # --- MEJORA: RADIOS INFINITOS EN LA MATRIZ (-1) ---
                     url_matrix = 'https://api.openrouteservice.org/v2/matrix/driving-car'
-                    resp_matrix = requests.post(url_matrix, json={"locations": lista_coords, "metrics": ["distance"]}, headers=headers)
+                    body_matrix = {
+                        "locations": lista_coords, 
+                        "metrics": ["distance"],
+                        "radiuses": [-1] * len(lista_coords) # <- Búsqueda infinita
+                    }
+                    resp_matrix = requests.post(url_matrix, json=body_matrix, headers=headers)
                     
                     if resp_matrix.status_code == 200:
                         matriz = resp_matrix.json()['distances']
                         num_locs = len(matriz)
                         
                         if punto_final_fijo:
-                            # Busca el destino que el usuario eligió para ESTA ruta en específico (por defecto usa el último si no lo encuentra)
                             end_node = indices_puntos_finales.get(id_unico, num_locs - 1)
                             manager = pywrapcp.RoutingIndexManager(num_locs, 1, [0], [int(end_node)])
                         else:
@@ -227,11 +230,15 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             st.error(f"No se encontró solución de optimización para {ruta}")
                             continue
                     else:
-                        st.error(f"Error API Matriz en {ruta} (¿Más de 50 paradas?): {resp_matrix.text}")
+                        st.error(f"Error API Matriz en {ruta}: {resp_matrix.text}")
                         continue
 
+                # --- MEJORA: RADIOS INFINITOS EN EL TRAZADO (-1) ---
                 url_dirs = 'https://api.openrouteservice.org/v2/directions/driving-car/geojson'
-                body_dirs = {"coordinates": coords_ordenadas}
+                body_dirs = {
+                    "coordinates": coords_ordenadas,
+                    "radiuses": [-1] * len(coords_ordenadas) # <- Búsqueda infinita
+                }
                 resp_dirs = requests.post(url_dirs, json=body_dirs, headers=headers)
                 
                 if resp_dirs.status_code == 200:
@@ -270,9 +277,8 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     
                     fg_trazado.add_to(mapa_calculado)
                 else:
-                    st.error(f"Error trazando calles de {ruta} (¿Más de 50 paradas?): {resp_dirs.text}")
+                    st.error(f"Error trazando calles de {ruta}: {resp_dirs.text}")
 
-                # --- EL RESPIRADOR: Esperamos 3 segundos antes de la siguiente ruta ---
                 time.sleep(3)
 
         folium.LayerControl(collapsed=True).add_to(mapa_calculado)
