@@ -216,7 +216,7 @@ if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"
 elif tipo_ruteo == "Creación de rutas propias":
     st.sidebar.markdown("---")
     st.sidebar.header("Configuración de Flota Automática")
-    st.sidebar.info("La IA repartirá las entregas garantizando que NADIE supere la hora de llegada establecida.")
+    st.sidebar.info("La IA exprimirá al máximo el horario límite (ej: 14:30) para usar la menor cantidad posible de vehículos.")
     
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
@@ -237,9 +237,10 @@ elif tipo_ruteo == "Creación de rutas propias":
         st.sidebar.error("❌ El horario de llegada debe ser mayor al de salida.")
         st.stop()
 
+
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Optimizando flota... (Respetando Límite Estricto de Horario)"):
+    with st.spinner("IA estrujando vehículos al máximo... (Esto tomará unos 15 segundos para garantizar la menor flota posible)"):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -306,7 +307,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                     nodos_ordenados.append(manager.IndexToNode(index))
                                 coords_ordenadas = [lista_coords[i] for i in nodos_ordenados]
                             else:
-                                st.error(f"No se encontró solución para {ruta}")
+                                st.error(f"No se encontró solución de optimización para {ruta}")
                                 continue
                         else:
                             st.error(f"Error Matriz en {ruta}: {err_matriz}")
@@ -343,9 +344,11 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{i+1}</div>"
                             folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
                         fg_trazado.add_to(mapa_calculado)
+                    else:
+                        st.error(f"Error trazando calles de {ruta}: {err_dirs}")
 
         # ==========================================================
-        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS MASIVAS (LÍMITE ESTRICTO)
+        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS MASIVAS (AHORRO EXTREMO DE FLOTA)
         # ==========================================================
         elif tipo_ruteo == "Creación de rutas propias":
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
@@ -377,8 +380,18 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     manager = pywrapcp.RoutingIndexManager(num_locs + 1, num_vehicles, [dummy_idx] * num_vehicles, [int(end_idx)] * num_vehicles)
                     routing = pywrapcp.RoutingModel(manager)
                     
+                    # 1. FUNCIÓN DE DISTANCIA CON "IMPUESTO DE ARRANQUE"
                     def distance_callback(from_index, to_index):
-                        return int(matriz_dist[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
+                        from_node = manager.IndexToNode(from_index)
+                        to_node = manager.IndexToNode(to_index)
+                        dist = int(matriz_dist[from_node][to_node])
+                        
+                        # Cada vez que un vehículo sale del "punto fantasma" hacia el trabajo real, le cobramos 50 MILLONES.
+                        # Esto obliga a la IA a usar la menor cantidad de autos posibles.
+                        if from_node == dummy_idx and to_node != end_idx:
+                            return dist + 50000000 
+                        return dist
+                        
                     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                     
@@ -388,22 +401,21 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         drive_time = int(matriz_dur[from_node][to_node])
                         wait_time = int(min_parada_vrp * 60) if to_node != dummy_idx and to_node != end_idx else 0
                         return drive_time + wait_time
+                        
                     time_callback_index = routing.RegisterTransitCallback(time_callback)
                     
-                    # 1. EL MURO DE HORMIGÓN ABSOLUTO: Ningún vehículo puede superar el max_time_sec bajo NINGÚN concepto.
+                    # 2. EL MURO DE HORMIGÓN DEL HORARIO: Límite estricto de llegada en max_time_sec (ej 14:30)
                     routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
                     
-                    # 2. COSTO FIJO: 100,000 pts por usar un auto, obliga a meter la mayor cantidad de carga posible por vehículo
-                    routing.SetFixedCostOfAllVehicles(100000)
-
-                    # 3. ANTI-COLAPSO: Penalización GIGANTE por descartar puntos (Garantiza que prefiera abrir auto 2 antes que descartar)
-                    penalty_drop = 10000000 
+                    # 3. ANTI-COLAPSO: Penalización GIGANTE por descartar puntos. Preferirá usar un auto extra a descartar algo.
+                    penalty_drop = 100000000 
                     for node in range(num_locs + 1):
                         if node != dummy_idx and node != end_idx:
                             routing.AddDisjunction([manager.NodeToIndex(node)], penalty_drop)
 
                     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
+                    # PATH_CHEAPEST_ARC obliga a la IA a "llenar a tope" un auto antes de pasar al siguiente.
+                    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
                     search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
                     search_parameters.time_limit.seconds = 15 
                     
@@ -489,22 +501,18 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
 # --- VISTA DE RESULTADOS CON PESTAÑAS ---
 if st.session_state['calculo_terminado']:
     
-    # Creamos las 3 pestañas principales
     tab_mapa, tab_cronogramas, tab_resumen = st.tabs([
         "🗺️ Mapa Interactivo", 
         "⏱️ Cronogramas Detallados", 
         "📊 Resumen General"
     ])
     
-    # --- PESTAÑA 1: MAPA ---
     with tab_mapa:
         st_folium(st.session_state['mapa_guardado'], width=1000, height=650, returned_objects=[], key="map_fix")
     
-    # Listas globales que llenaremos en la Pestaña 2 para usar en la Pestaña 3 y en los Excels
     data_global_detallada = []
     data_resumen_general = []
         
-    # --- PESTAÑA 2: CRONOGRAMAS Y AJUSTES ---
     with tab_cronogramas:
         for d in st.session_state['datos_resumen']:
             with st.container():
@@ -571,13 +579,12 @@ if st.session_state['calculo_terminado']:
                 
                 data_global_detallada.extend(rows_excel)
                 
-                # Alimentamos la tabla resumen de la Pestaña 3
                 data_resumen_general.append({
                     "Día": d['dia'],
                     "Ruta": d['ruta'],
                     "Hs de Inicio": h_inicio.strftime("%H:%M"),
                     "Hs de Finalización": hora_llegada_final,
-                    "Minutos de Demora (Espera Total)": total_espera_calc,
+                    "Minutos de Demora": total_espera_calc,
                     "Kms Recorridos": round(dist_acum, 2)
                 })
                 
@@ -591,15 +598,13 @@ if st.session_state['calculo_terminado']:
                     st.download_button("📥 Descargar Excel de esta Ruta", bio.getvalue(), f"Ruta_{limpiar_nombre_excel(d['id_unico'])}.xlsx", key=f"dl_{d['id_unico']}")
                 st.divider()
 
-    # --- PESTAÑA 3: RESUMEN GENERAL ---
     with tab_resumen:
         st.markdown("### Tabla Resumen Operativo")
-        st.info("Este es el resumen general de todas las rutas generadas, mostrando los horarios reales de finalización para auditar el cumplimiento.")
+        st.info("Este es el resumen general para auditar la eficiencia y horarios reales de finalización de todos los autos.")
         
         df_resumen = pd.DataFrame(data_resumen_general)
         st.dataframe(df_resumen, use_container_width=True)
         
-        # Botón para descargar SÓLO el resumen
         bio_resumen = io.BytesIO()
         with pd.ExcelWriter(bio_resumen, engine='openpyxl') as w:
             df_resumen.to_excel(w, index=False, sheet_name="Resumen")
@@ -608,12 +613,11 @@ if st.session_state['calculo_terminado']:
         with col_btn1:
             st.download_button("📥 DESCARGAR SOLO RESUMEN", bio_resumen.getvalue(), "Resumen_General.xlsx", type="secondary", use_container_width=True)
             
-        # Botón para descargar el CRONOGRAMA COMPLETO (Sábana de datos)
         if data_global_detallada:
             df_glob = pd.DataFrame(data_global_detallada)
             bio_g = io.BytesIO()
             with pd.ExcelWriter(bio_g, engine='openpyxl') as w:
                 df_glob.to_excel(w, index=False, sheet_name="Cronograma Detallado")
-                df_resumen.to_excel(w, index=False, sheet_name="Resumen General") # Agregamos ambas hojas al maestro
+                df_resumen.to_excel(w, index=False, sheet_name="Resumen General") 
             with col_btn2:
                 st.download_button("📥 DESCARGAR CRONOGRAMA MAESTRO (Completo)", bio_g.getvalue(), "Cronograma_Maestro.xlsx", type="primary", use_container_width=True)
