@@ -77,9 +77,10 @@ def obtener_matriz_masiva(lista_coords, headers):
         else:
             return None, None, resp.text
     else:
+        # MODO TODOTERRENO (Para más de 50 puntos)
         matriz_dist = []
         matriz_dur = []
-        vel_ms = 6.94 
+        vel_ms = 6.94 # Asume aprox 25 km/h en ciudad
         for p1 in lista_coords:
             f_dist = []
             f_dur = []
@@ -216,7 +217,7 @@ if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"
 elif tipo_ruteo == "Creación de rutas propias":
     st.sidebar.markdown("---")
     st.sidebar.header("Configuración de Flota Automática")
-    st.sidebar.info("La IA usará la menor cantidad posible de vehículos asegurando que nadie se pase del límite de llegada.")
+    st.sidebar.info("La IA equilibrará los tiempos y usará los autos necesarios para cumplir el horario límite.")
     
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
@@ -240,7 +241,7 @@ elif tipo_ruteo == "Creación de rutas propias":
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Optimizando flota masiva... (La IA está agrupando los puntos por zonas y calculando los vehículos)"):
+    with st.spinner("IA Logística trabajando... (Equilibrando cargas, horarios y vehículos. Tomará unos 15 segundos)"):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -348,7 +349,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         st.error(f"Error trazando calles de {ruta}: {err_dirs}")
 
         # ==========================================================
-        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS MASIVAS (A PRUEBA DE FALLOS)
+        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS MASIVAS (LA SOLUCIÓN A PRUEBA DE BALAS)
         # ==========================================================
         elif tipo_ruteo == "Creación de rutas propias":
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
@@ -393,29 +394,30 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         return drive_time + wait_time
                     time_callback_index = routing.RegisterTransitCallback(time_callback)
                     
-                    # 1. Límite estricto de llegada 
-                    routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
+                    # 1. EL MURO FLEXIBLE: Límite físico en 24 horas para no dar error de "Imposible"
+                    routing.AddDimension(time_callback_index, 0, 86400, True, "Time")
+                    time_dimension = routing.GetDimensionOrDie("Time")
                     
-                    # 2. VÁLVULA DE ESCAPE ANTI-COLAPSO: Le permite descartar un punto SOLO si es matemáticamente imposible llegar a tiempo
-                    penalty = 10000000 
-                    for node in range(num_locs + 1):
-                        if node != dummy_idx and node != end_idx:
-                            routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
+                    # 2. MULTA POR LLEGAR TARDE: Fuerza a abrir vehículos si sobrepasa la hora límite (ej: 14:30)
+                    penalty_late = 100000 
+                    for vehicle_id in range(num_vehicles):
+                        time_dimension.SetCumulVarSoftUpperBound(routing.End(vehicle_id), max_time_sec, penalty_late)
 
-                    # 3. PENALIZACIÓN PARA MINIMIZAR FLOTA: Hará todo lo posible por meter más carga en menos vehículos
-                    routing.SetFixedCostOfAllVehicles(50000)
+                    # 3. EL EQUILIBRADOR: Fuerza a que los vehículos que ya están trabajando, trabajen la misma cantidad de horas
+                    time_dimension.SetGlobalSpanCostCoefficient(10)
+                    
+                    # 4. COSTO DE VEHÍCULO: Evita que abra autos "por las dudas". Solo lo hará si es estrictamente necesario.
+                    routing.SetFixedCostOfAllVehicles(1000000)
 
                     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
                     search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-                    search_parameters.time_limit.seconds = 10 
+                    search_parameters.time_limit.seconds = 15 # Le damos 15 seg para resolver el rompecabezas perfecto
                     
                     solution = routing.SolveWithParameters(search_parameters)
                     
                     if solution:
                         vehiculo_real_count = 1
-                        nodos_visitados_totales = 0
-                        
                         for vehicle_id in range(num_vehicles):
                             index = routing.Start(vehicle_id)
                             first_visit = solution.Value(routing.NextVar(index))
@@ -428,7 +430,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                 node = manager.IndexToNode(index)
                                 if node != dummy_idx:
                                     nodos_ordenados.append(node)
-                                    nodos_visitados_totales += 1
                                 index = solution.Value(routing.NextVar(index))
                             nodos_ordenados.append(end_idx)
                             
@@ -475,13 +476,8 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                 fg_trazado.add_to(mapa_calculado)
                             else:
                                 st.error(f"Error en trazado: {err_dirs}")
-                        
-                        # Si la IA tuvo que descartar puntos porque el tiempo era imposible
-                        if nodos_visitados_totales < num_locs - 1:
-                            faltantes = (num_locs - 1) - nodos_visitados_totales
-                            st.warning(f"⚠️ Atención: En el Día {dia}, hubo {faltantes} puntos que no se pudieron incluir en ninguna ruta porque están demasiado lejos para cumplir con el límite de llegada a las {hora_llegada_vrp.strftime('%H:%M')}.")
                     else:
-                        st.error(f"❌ Imposible generar rutas para {dia}. Error de cálculo.")
+                        st.error(f"❌ Ocurrió un error matemático al procesar el {dia}. Intenta con menos puntos o verifica el archivo.")
                 else:
                     st.error(f"Error Matriz {dia}: {err_matriz}")
 
