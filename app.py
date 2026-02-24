@@ -78,18 +78,16 @@ def obtener_matriz_masiva(lista_coords, headers):
         else:
             return None, None, resp.text
     else:
-        # MODO COSTURA DE MATRICES (100% TIEMPOS REALES DE OPENROUTESERVICE)
+        # COSTURA DE MATRICES (Tiempos Reales de Calle)
         matriz_dist = [[0.0] * N for _ in range(N)]
         matriz_dur = [[0.0] * N for _ in range(N)]
         
-        chunk_size = 25 # Para garantizar nunca superar el límite de 50 (25 origen + 25 destino = 50)
-        
+        chunk_size = 25 
         for i in range(0, N, chunk_size):
             for j in range(0, N, chunk_size):
                 src_chunk = lista_coords[i : i+chunk_size]
                 dst_chunk = lista_coords[j : j+chunk_size]
                 
-                # Juntamos los puntos sin repetir para este mini-mapa
                 locs = []
                 src_indices = []
                 dst_indices = []
@@ -115,7 +113,6 @@ def obtener_matriz_masiva(lista_coords, headers):
                     data = resp.json()
                     dists = data['distances']
                     durs = data['durations']
-                    # Cosemos el mini-mapa dentro de la matriz gigante
                     for u in range(len(src_chunk)):
                         for v in range(len(dst_chunk)):
                             matriz_dist[i+u][j+v] = dists[u][v]
@@ -123,7 +120,7 @@ def obtener_matriz_masiva(lista_coords, headers):
                 else:
                     return None, None, f"Error en ORS Matrix (Bloque {i}-{j}): {resp.text}"
                 
-                time.sleep(1.6) # Respirador para no ser bloqueados por exceso de velocidad de consultas
+                time.sleep(1.6) 
                 
         return matriz_dist, matriz_dur, None
 
@@ -252,7 +249,7 @@ if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"
 elif tipo_ruteo == "Creación de rutas propias":
     st.sidebar.markdown("---")
     st.sidebar.header("Configuración de Flota Automática")
-    st.sidebar.info("La IA usará TIEMPOS REALES DE CALLE para empaquetar el máximo de puntos por auto.")
+    st.sidebar.info("Modo Pétalo Activado: La IA evitará rutas cruzadas y agrupará las entregas en forma circular.")
     
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
@@ -275,7 +272,7 @@ elif tipo_ruteo == "Creación de rutas propias":
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Descargando mapas reales y uniendo sectores... (Esto garantizará tiempos 100% exactos)"):
+    with st.spinner("IA Logística: Formando clústeres circulares para evitar idas y vueltas... (20 segs)"):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -330,7 +327,8 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                             
                             search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                            # AQUÍ TAMBIÉN CAMBIAMOS A SAVINGS PARA RUTAS INDIVIDUALES MÁS LÓGICAS
+                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
                             solution = routing.SolveWithParameters(search_parameters)
                             
                             if solution:
@@ -381,7 +379,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         fg_trazado.add_to(mapa_calculado)
 
         # ==========================================================
-        # LÓGICA 3: CREACIÓN DE RUTAS (AHORRO EXTREMO Y TIEMPOS REALES)
+        # LÓGICA 3: CREACIÓN DE RUTAS (NUEVO ALGORITMO SAVINGS)
         # ==========================================================
         elif tipo_ruteo == "Creación de rutas propias":
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
@@ -399,7 +397,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                 if num_locs < 2: continue
                 dibujar_geozona_circular(lista_coords, f"🌍 DÍA: {dia} (Zona)", "black", mapa_calculado)
 
-                # AQUÍ OCURRE LA MAGIA: Obtiene los tiempos REALES conectando matrices si son > 50
                 matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
                 
                 if not err_matriz:
@@ -410,7 +407,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     matriz_dist.append([0] * (num_locs + 1))
                     matriz_dur.append([0] * (num_locs + 1))
                     
-                    # Verificación física estricta con tiempos 100% reales.
                     for i in range(num_locs):
                         if i != dummy_idx and i != end_idx:
                             tiempo_minimo_viaje = int(min_parada_vrp * 60) + int(matriz_dur[i][end_idx])
@@ -427,7 +423,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         to_node = manager.IndexToNode(to_index)
                         dist = int(matriz_dist[from_node][to_node])
                         
-                        # IMPUESTO DE ARRANQUE: Abrir el Auto 2, 3, etc. cuesta 10 MILLONES de distancia falsa.
                         if from_node == dummy_idx and to_node != end_idx:
                             return dist + 10000000 
                         return dist
@@ -444,14 +439,14 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         
                     time_callback_index = routing.RegisterTransitCallback(time_callback)
                     
-                    # LEY ABSOLUTA: NADIE SUPERA LA HORA LÍMITE (EJ: 14:30).
                     routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
 
                     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                    # LLENADO AL MÁXIMO (PATH_CHEAPEST_ARC): Llena un auto hasta el último segundo antes de abrir otro.
-                    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                    
+                    # CAMBIO MAGISTRAL AQUÍ: SAVINGS crea rutas circulares y lógicas, evitando los cruces de líneas tipo Pac-Man.
+                    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
                     search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-                    search_parameters.time_limit.seconds = 20
+                    search_parameters.time_limit.seconds = 20 
                     
                     solution = routing.SolveWithParameters(search_parameters)
                     
@@ -517,7 +512,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             else:
                                 st.error(f"Error en trazado: {err_dirs}")
                     else:
-                        st.error(f"❌ Imposible generar rutas. Ni siquiera creando un auto por paquete logran llegar antes de las {hora_llegada_vrp.strftime('%H:%M')}.")
+                        st.error(f"❌ Imposible matemático en el {dia}. La IA no pudo encajar todos los puntos antes de la hora límite. Intenta subir el límite de llegada 30 minutos.")
                 else:
                     st.error(f"Error Matriz {dia}: {err_matriz}")
 
