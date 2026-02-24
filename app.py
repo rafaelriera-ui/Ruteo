@@ -216,7 +216,7 @@ if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"
 elif tipo_ruteo == "Creación de rutas propias":
     st.sidebar.markdown("---")
     st.sidebar.header("Configuración de Flota Automática")
-    st.sidebar.info("La IA usará TODO el tiempo disponible para generar la mínima cantidad de rutas y no dejará ningún punto afuera.")
+    st.sidebar.info("La IA usará la MENOR cantidad de vehículos posibles, llenándolos al máximo antes del límite de tiempo.")
     
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
@@ -237,10 +237,9 @@ elif tipo_ruteo == "Creación de rutas propias":
         st.sidebar.error("❌ El horario de llegada debe ser mayor al de salida.")
         st.stop()
 
-
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("IA procesando... (Garantizando 100% de visitas, mínimos kilómetros y máxima carga por vehículo)"):
+    with st.spinner("IA Logística Modo Extremo: Llenando vehículos al tope para minimizar la flota... (20 segs)"):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -344,11 +343,9 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{i+1}</div>"
                             folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
                         fg_trazado.add_to(mapa_calculado)
-                    else:
-                        st.error(f"Error trazando calles de {ruta}: {err_dirs}")
 
         # ==========================================================
-        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS MASIVAS (LA SOLUCIÓN A PRUEBA DE BALAS)
+        # LÓGICA 3: CREACIÓN DE RUTAS (AHORRO EXTREMO DE AUTOS)
         # ==========================================================
         elif tipo_ruteo == "Creación de rutas propias":
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
@@ -376,47 +373,51 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     matriz_dist.append([0] * (num_locs + 1))
                     matriz_dur.append([0] * (num_locs + 1))
                     
+                    # Verificación física previa para evitar errores imposibles
+                    for i in range(num_locs):
+                        if i != dummy_idx and i != end_idx:
+                            tiempo_minimo_viaje = int(min_parada_vrp * 60) + int(matriz_dur[i][end_idx])
+                            if tiempo_minimo_viaje > max_time_sec:
+                                st.error(f"❌ Error Físico: El punto '{df_dia.iloc[i]['Lugar']}' necesita al menos {tiempo_minimo_viaje//60} min para ser visitado y viajar al destino final, pero tu límite total es de {max_time_sec//60} min. Debes ampliar el horario de llegada.")
+                                st.stop()
+
                     num_vehicles = num_locs 
                     manager = pywrapcp.RoutingIndexManager(num_locs + 1, num_vehicles, [dummy_idx] * num_vehicles, [int(end_idx)] * num_vehicles)
                     routing = pywrapcp.RoutingModel(manager)
                     
-                    # 1. OBJETIVO PRIMARIO: MINIMIZAR KILÓMETROS
                     def distance_callback(from_index, to_index):
-                        return int(matriz_dist[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
+                        from_node = manager.IndexToNode(from_index)
+                        to_node = manager.IndexToNode(to_index)
+                        dist = int(matriz_dist[from_node][to_node])
+                        
+                        # IMPUESTO DE ARRANQUE: Usar un auto cuesta 10 MILLONES de metros. 
+                        # La IA preferirá exprimir el tiempo de 1 auto antes que pagar esto.
+                        if from_node == dummy_idx and to_node != end_idx:
+                            return dist + 10000000 
+                        return dist
+                        
                     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                     
-                    # 2. DEFINICIÓN DE TIEMPOS
                     def time_callback(from_index, to_index):
                         from_node = manager.IndexToNode(from_index)
                         to_node = manager.IndexToNode(to_index)
                         drive_time = int(matriz_dur[from_node][to_node])
                         wait_time = int(min_parada_vrp * 60) if to_node != dummy_idx and to_node != end_idx else 0
                         return drive_time + wait_time
+                        
                     time_callback_index = routing.RegisterTransitCallback(time_callback)
                     
-                    # CERO DESCARTES: Al no incluir Disjunctions, la IA tiene prohibido dejar puntos afuera. Debe visitar TODOS.
+                    # LEY ABSOLUTA: Límite estricto de llegada. Nadie se pasa de las 14:30.
+                    routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
                     
-                    # LÍMITE DE HORARIO SOFT (Flexible): Le damos hasta 24 hs reales para que no colapse matemáticamente
-                    routing.AddDimension(time_callback_index, 0, 86400, True, "Time")
-                    time_dimension = routing.GetDimensionOrDie("Time")
-                    
-                    # MULTA POR PASARSE DE LAS 14:30
-                    penalty_late = 50000 
-                    for vehicle_id in range(num_vehicles):
-                        time_dimension.SetCumulVarSoftUpperBound(routing.End(vehicle_id), max_time_sec, penalty_late)
-
-                    # AHORRO EXTREMO DE FLOTA (10 Millones): Forzará a meter todo en 1 auto hasta las 14:30. 
-                    routing.SetFixedCostOfAllVehicles(10000000)
-                    
-                    # EQUILIBRIO MODERADO: Busca que las cargas no queden 1 auto 7 hs y otro 1 hs.
-                    time_dimension.SetGlobalSpanCostCoefficient(100)
+                    # Al NO agregar "Disjunctions" con penalizaciones, obligamos a la IA a visitar el 100% de los puntos. No puede descartar nada.
 
                     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                    # PATH_CHEAPEST_ARC con local search asegura rutas lógicas y apretadas.
+                    # PATH_CHEAPEST_ARC: Llena un auto al tope antes de abrir otro.
                     search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
                     search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-                    search_parameters.time_limit.seconds = 20 # 20 Segundos de razonamiento profundo
+                    search_parameters.time_limit.seconds = 20 # 20 Segundos para encontrar el rompecabezas perfecto
                     
                     solution = routing.SolveWithParameters(search_parameters)
                     
@@ -482,7 +483,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             else:
                                 st.error(f"Error en trazado: {err_dirs}")
                     else:
-                        st.error(f"❌ Ocurrió un error matemático al procesar el {dia}. Intenta revisar las coordenadas.")
+                        st.error(f"❌ Imposible matemático en el {dia}. La IA no pudo encajar todos los puntos antes de la hora límite. Intenta subir el límite de llegada 30 minutos.")
                 else:
                     st.error(f"Error Matriz {dia}: {err_matriz}")
 
@@ -593,7 +594,7 @@ if st.session_state['calculo_terminado']:
 
     with tab_resumen:
         st.markdown("### Tabla Resumen Operativo")
-        st.info("Este es el resumen general de toda la operación, preparado para exportar y controlar a la flota.")
+        st.info("Este es el resumen general para auditar la eficiencia y horarios reales de finalización de todos los autos.")
         
         df_resumen = pd.DataFrame(data_resumen_general)
         st.dataframe(df_resumen, use_container_width=True)
