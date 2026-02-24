@@ -67,7 +67,8 @@ def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, most
         capa.add_to(mapa)
 
 def obtener_matriz_masiva(lista_coords, headers):
-    if len(lista_coords) <= 50:
+    N = len(lista_coords)
+    if N <= 50:
         url_matrix = 'https://api.openrouteservice.org/v2/matrix/driving-car'
         body_matrix = {"locations": lista_coords, "metrics": ["distance", "duration"]}
         resp = requests.post(url_matrix, json=body_matrix, headers=headers)
@@ -77,18 +78,53 @@ def obtener_matriz_masiva(lista_coords, headers):
         else:
             return None, None, resp.text
     else:
-        matriz_dist = []
-        matriz_dur = []
-        vel_ms = 6.94 
-        for p1 in lista_coords:
-            f_dist = []
-            f_dur = []
-            for p2 in lista_coords:
-                dist_m = haversine((p1[1], p1[0]), (p2[1], p2[0]), unit=Unit.METERS) * 1.3
-                f_dist.append(dist_m)
-                f_dur.append(dist_m / vel_ms)
-            matriz_dist.append(f_dist)
-            matriz_dur.append(f_dur)
+        # MODO COSTURA DE MATRICES (100% TIEMPOS REALES DE OPENROUTESERVICE)
+        matriz_dist = [[0.0] * N for _ in range(N)]
+        matriz_dur = [[0.0] * N for _ in range(N)]
+        
+        chunk_size = 25 # Para garantizar nunca superar el límite de 50 (25 origen + 25 destino = 50)
+        
+        for i in range(0, N, chunk_size):
+            for j in range(0, N, chunk_size):
+                src_chunk = lista_coords[i : i+chunk_size]
+                dst_chunk = lista_coords[j : j+chunk_size]
+                
+                # Juntamos los puntos sin repetir para este mini-mapa
+                locs = []
+                src_indices = []
+                dst_indices = []
+                
+                for pt in src_chunk:
+                    if pt not in locs: locs.append(pt)
+                    src_indices.append(locs.index(pt))
+                    
+                for pt in dst_chunk:
+                    if pt not in locs: locs.append(pt)
+                    dst_indices.append(locs.index(pt))
+                    
+                url_matrix = 'https://api.openrouteservice.org/v2/matrix/driving-car'
+                body_matrix = {
+                    "locations": locs,
+                    "sources": src_indices,
+                    "destinations": dst_indices,
+                    "metrics": ["distance", "duration"]
+                }
+                
+                resp = requests.post(url_matrix, json=body_matrix, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    dists = data['distances']
+                    durs = data['durations']
+                    # Cosemos el mini-mapa dentro de la matriz gigante
+                    for u in range(len(src_chunk)):
+                        for v in range(len(dst_chunk)):
+                            matriz_dist[i+u][j+v] = dists[u][v]
+                            matriz_dur[i+u][j+v] = durs[u][v]
+                else:
+                    return None, None, f"Error en ORS Matrix (Bloque {i}-{j}): {resp.text}"
+                
+                time.sleep(1.6) # Respirador para no ser bloqueados por exceso de velocidad de consultas
+                
         return matriz_dist, matriz_dur, None
 
 def obtener_trazado_masivo(coords_ordenadas, headers):
@@ -216,7 +252,7 @@ if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"
 elif tipo_ruteo == "Creación de rutas propias":
     st.sidebar.markdown("---")
     st.sidebar.header("Configuración de Flota Automática")
-    st.sidebar.info("La IA usará la MENOR cantidad de vehículos posibles, llenándolos al máximo antes del límite de tiempo.")
+    st.sidebar.info("La IA usará TIEMPOS REALES DE CALLE para empaquetar el máximo de puntos por auto.")
     
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
@@ -239,7 +275,7 @@ elif tipo_ruteo == "Creación de rutas propias":
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("IA Logística Modo Extremo: Llenando vehículos al tope para minimizar la flota... (20 segs)"):
+    with st.spinner("Descargando mapas reales y uniendo sectores... (Esto garantizará tiempos 100% exactos)"):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -345,7 +381,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         fg_trazado.add_to(mapa_calculado)
 
         # ==========================================================
-        # LÓGICA 3: CREACIÓN DE RUTAS (AHORRO EXTREMO DE AUTOS)
+        # LÓGICA 3: CREACIÓN DE RUTAS (AHORRO EXTREMO Y TIEMPOS REALES)
         # ==========================================================
         elif tipo_ruteo == "Creación de rutas propias":
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
@@ -363,6 +399,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                 if num_locs < 2: continue
                 dibujar_geozona_circular(lista_coords, f"🌍 DÍA: {dia} (Zona)", "black", mapa_calculado)
 
+                # AQUÍ OCURRE LA MAGIA: Obtiene los tiempos REALES conectando matrices si son > 50
                 matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
                 
                 if not err_matriz:
@@ -373,12 +410,12 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     matriz_dist.append([0] * (num_locs + 1))
                     matriz_dur.append([0] * (num_locs + 1))
                     
-                    # Verificación física previa para evitar errores imposibles
+                    # Verificación física estricta con tiempos 100% reales.
                     for i in range(num_locs):
                         if i != dummy_idx and i != end_idx:
                             tiempo_minimo_viaje = int(min_parada_vrp * 60) + int(matriz_dur[i][end_idx])
                             if tiempo_minimo_viaje > max_time_sec:
-                                st.error(f"❌ Error Físico: El punto '{df_dia.iloc[i]['Lugar']}' necesita al menos {tiempo_minimo_viaje//60} min para ser visitado y viajar al destino final, pero tu límite total es de {max_time_sec//60} min. Debes ampliar el horario de llegada.")
+                                st.error(f"❌ Error Físico: Ir desde '{df_dia.iloc[i]['Lugar']}' hasta el destino final toma por sí solo {tiempo_minimo_viaje//60} min reales, superando tu límite total de {max_time_sec//60} min. Necesitas extender la hora de llegada.")
                                 st.stop()
 
                     num_vehicles = num_locs 
@@ -390,8 +427,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         to_node = manager.IndexToNode(to_index)
                         dist = int(matriz_dist[from_node][to_node])
                         
-                        # IMPUESTO DE ARRANQUE: Usar un auto cuesta 10 MILLONES de metros. 
-                        # La IA preferirá exprimir el tiempo de 1 auto antes que pagar esto.
+                        # IMPUESTO DE ARRANQUE: Abrir el Auto 2, 3, etc. cuesta 10 MILLONES de distancia falsa.
                         if from_node == dummy_idx and to_node != end_idx:
                             return dist + 10000000 
                         return dist
@@ -408,16 +444,14 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         
                     time_callback_index = routing.RegisterTransitCallback(time_callback)
                     
-                    # LEY ABSOLUTA: Límite estricto de llegada. Nadie se pasa de las 14:30.
+                    # LEY ABSOLUTA: NADIE SUPERA LA HORA LÍMITE (EJ: 14:30).
                     routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
-                    
-                    # Al NO agregar "Disjunctions" con penalizaciones, obligamos a la IA a visitar el 100% de los puntos. No puede descartar nada.
 
                     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                    # PATH_CHEAPEST_ARC: Llena un auto al tope antes de abrir otro.
+                    # LLENADO AL MÁXIMO (PATH_CHEAPEST_ARC): Llena un auto hasta el último segundo antes de abrir otro.
                     search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
                     search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-                    search_parameters.time_limit.seconds = 20 # 20 Segundos para encontrar el rompecabezas perfecto
+                    search_parameters.time_limit.seconds = 20
                     
                     solution = routing.SolveWithParameters(search_parameters)
                     
@@ -483,7 +517,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             else:
                                 st.error(f"Error en trazado: {err_dirs}")
                     else:
-                        st.error(f"❌ Imposible matemático en el {dia}. La IA no pudo encajar todos los puntos antes de la hora límite. Intenta subir el límite de llegada 30 minutos.")
+                        st.error(f"❌ Imposible generar rutas. Ni siquiera creando un auto por paquete logran llegar antes de las {hora_llegada_vrp.strftime('%H:%M')}.")
                 else:
                     st.error(f"Error Matriz {dia}: {err_matriz}")
 
