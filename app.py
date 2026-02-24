@@ -216,7 +216,7 @@ if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"
 elif tipo_ruteo == "Creación de rutas propias":
     st.sidebar.markdown("---")
     st.sidebar.header("Configuración de Flota Automática")
-    st.sidebar.info("La IA empaquetará la mayor cantidad posible de puntos en el Auto 1 antes de usar el Auto 2.")
+    st.sidebar.info("La IA repartirá las entregas garantizando que NADIE supere la hora de llegada establecida.")
     
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
@@ -225,7 +225,7 @@ elif tipo_ruteo == "Creación de rutas propias":
     with col_salida:
         hora_salida_vrp = st.time_input("Hora Salida", datetime.time(8, 0))
     with col_llegada:
-        hora_llegada_vrp = st.time_input("Límite Llegada", datetime.time(18, 0))
+        hora_llegada_vrp = st.time_input("Límite Llegada", datetime.time(14, 30))
         
     min_parada_vrp = st.sidebar.number_input("Minutos espera por parada", min_value=0, value=15, step=1)
     
@@ -237,10 +237,9 @@ elif tipo_ruteo == "Creación de rutas propias":
         st.sidebar.error("❌ El horario de llegada debe ser mayor al de salida.")
         st.stop()
 
-
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("IA Logística maximizando carga por vehículo para ahorrar autos..."):
+    with st.spinner("Optimizando flota... (Respetando Límite Estricto de Horario)"):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -307,7 +306,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                     nodos_ordenados.append(manager.IndexToNode(index))
                                 coords_ordenadas = [lista_coords[i] for i in nodos_ordenados]
                             else:
-                                st.error(f"No se encontró solución de optimización para {ruta}")
+                                st.error(f"No se encontró solución para {ruta}")
                                 continue
                         else:
                             st.error(f"Error Matriz en {ruta}: {err_matriz}")
@@ -344,11 +343,9 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{i+1}</div>"
                             folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
                         fg_trazado.add_to(mapa_calculado)
-                    else:
-                        st.error(f"Error trazando calles de {ruta}: {err_dirs}")
 
         # ==========================================================
-        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS MASIVAS (LLENADO AL MÁXIMO)
+        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS MASIVAS (LÍMITE ESTRICTO)
         # ==========================================================
         elif tipo_ruteo == "Creación de rutas propias":
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
@@ -393,28 +390,20 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         return drive_time + wait_time
                     time_callback_index = routing.RegisterTransitCallback(time_callback)
                     
-                    # 1. EL MURO FLEXIBLE: Límite físico en 24 horas.
-                    routing.AddDimension(time_callback_index, 0, 86400, True, "Time")
-                    time_dimension = routing.GetDimensionOrDie("Time")
+                    # 1. EL MURO DE HORMIGÓN ABSOLUTO: Ningún vehículo puede superar el max_time_sec bajo NINGÚN concepto.
+                    routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
                     
-                    # 2. MULTA POR LLEGAR TARDE: Permitimos que se pase un poquito si es estrictamente necesario, pero lo evita.
-                    penalty_late = 5000 
-                    for vehicle_id in range(num_vehicles):
-                        time_dimension.SetCumulVarSoftUpperBound(routing.End(vehicle_id), max_time_sec, penalty_late)
+                    # 2. COSTO FIJO: 100,000 pts por usar un auto, obliga a meter la mayor cantidad de carga posible por vehículo
+                    routing.SetFixedCostOfAllVehicles(100000)
 
-                    # 3. PENALIZACIÓN EXTREMA POR ABRIR UN AUTO NUEVO (50 Millones)
-                    # Obliga a meter todo en el Auto 1 hasta que el tiempo se agote por completo (ej: 14:29).
-                    routing.SetFixedCostOfAllVehicles(50000000)
-
-                    # 4. PENALIZACIÓN POR DESCARTAR PUNTOS (Para que visite todos sí o sí)
-                    penalty_drop = 100000000 
+                    # 3. ANTI-COLAPSO: Penalización GIGANTE por descartar puntos (Garantiza que prefiera abrir auto 2 antes que descartar)
+                    penalty_drop = 10000000 
                     for node in range(num_locs + 1):
                         if node != dummy_idx and node != end_idx:
                             routing.AddDisjunction([manager.NodeToIndex(node)], penalty_drop)
 
                     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                    # CAMBIO CLAVE: PATH_CHEAPEST_ARC obliga a la IA a armar 1 ruta entera antes de empezar la siguiente.
-                    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
                     search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
                     search_parameters.time_limit.seconds = 15 
                     
@@ -486,7 +475,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         
                         if nodos_visitados_totales < num_locs - 1:
                             faltantes = (num_locs - 1) - nodos_visitados_totales
-                            st.warning(f"⚠️ Atención: En el {dia}, {faltantes} puntos estaban tan aislados geográficamente que incluirlos hubiera excedido las 24hs.")
+                            st.warning(f"⚠️ En el {dia}, {faltantes} puntos estaban tan aislados geográficamente que ni siquiera dedicándoles un auto exclusivo logran volver antes del límite de las {hora_llegada_vrp.strftime('%H:%M')}.")
                     else:
                         st.error(f"❌ Imposible generar rutas para {dia}. Error de cálculo.")
                 else:
@@ -497,20 +486,29 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
         st.session_state['datos_resumen'] = datos_para_resumen
         st.session_state['calculo_terminado'] = True
 
-# --- VISTA DE RESULTADOS ---
+# --- VISTA DE RESULTADOS CON PESTAÑAS ---
 if st.session_state['calculo_terminado']:
-    c_map, c_res = st.columns([1.8, 1.2])
     
-    with c_map:
-        st_folium(st.session_state['mapa_guardado'], width=800, height=750, returned_objects=[], key="map_fix")
+    # Creamos las 3 pestañas principales
+    tab_mapa, tab_cronogramas, tab_resumen = st.tabs([
+        "🗺️ Mapa Interactivo", 
+        "⏱️ Cronogramas Detallados", 
+        "📊 Resumen General"
+    ])
+    
+    # --- PESTAÑA 1: MAPA ---
+    with tab_mapa:
+        st_folium(st.session_state['mapa_guardado'], width=1000, height=650, returned_objects=[], key="map_fix")
+    
+    # Listas globales que llenaremos en la Pestaña 2 para usar en la Pestaña 3 y en los Excels
+    data_global_detallada = []
+    data_resumen_general = []
         
-    with c_res:
-        st.markdown("### ⏱️ Cronograma de Entregas")
-        data_global = []
-        
+    # --- PESTAÑA 2: CRONOGRAMAS Y AJUSTES ---
+    with tab_cronogramas:
         for d in st.session_state['datos_resumen']:
             with st.container():
-                st.markdown(f"**{d['dia']} | {d['ruta']}** ({d['puntos']} pts | {d['dist_km']} km)")
+                st.markdown(f"**📍 {d['dia']} | {d['ruta']}** ({d['puntos']} pts | {d['dist_km']} km)")
                 
                 c1, c2, c3 = st.columns([1.2, 1, 1])
                 
@@ -521,16 +519,17 @@ if st.session_state['calculo_terminado']:
                     default_wait = min_parada_vrp
                 
                 h_inicio = c1.time_input("Salida", default_h, key=f"h_{d['id_unico']}")
-                espera = c2.number_input("Espera (min)", 0, 300, default_wait, key=f"w_{d['id_unico']}")
+                espera = c2.number_input("Espera por parada (min)", 0, 300, default_wait, key=f"w_{d['id_unico']}")
                 
                 total_espera_calc = espera * (d['puntos'] - 1) if d['puntos'] > 0 else 0
                 total_min = d['drive_mins'] + total_espera_calc
-                c3.metric("Total", f"{total_min:.0f} min")
+                c3.metric("Total Estimado", f"{total_min:.0f} min")
                 
                 t_actual = datetime.datetime.combine(datetime.date.today(), h_inicio)
                 dist_acum = 0.0
                 mins_acum = 0.0
                 rows_excel = []
+                hora_llegada_final = "-"
                 
                 for i, p in enumerate(d['paradas']):
                     dist_tramo = 0.0
@@ -548,6 +547,9 @@ if st.session_state['calculo_terminado']:
                         mins_tramo = espera_real
                     
                     llegada = t_actual
+                    if es_ultimo:
+                        hora_llegada_final = llegada.strftime("%H:%M")
+                        
                     salida = llegada + datetime.timedelta(minutes=espera_real)
                     t_actual = salida
                     
@@ -567,22 +569,51 @@ if st.session_state['calculo_terminado']:
                         "Km Acumulados": round(dist_acum, 2)
                     })
                 
-                data_global.extend(rows_excel)
+                data_global_detallada.extend(rows_excel)
                 
-                with st.expander("Ver Detalle"):
+                # Alimentamos la tabla resumen de la Pestaña 3
+                data_resumen_general.append({
+                    "Día": d['dia'],
+                    "Ruta": d['ruta'],
+                    "Hs de Inicio": h_inicio.strftime("%H:%M"),
+                    "Hs de Finalización": hora_llegada_final,
+                    "Minutos de Demora (Espera Total)": total_espera_calc,
+                    "Kms Recorridos": round(dist_acum, 2)
+                })
+                
+                with st.expander("Ver Cronograma Detallado"):
                     df_view = pd.DataFrame(rows_excel)
                     st.dataframe(df_view[['Orden','Lugar','Llegada','Salida','Minutos Tramo','Minutos Acumulados','Km Acumulados']], use_container_width=True)
                     
                     bio = io.BytesIO()
                     with pd.ExcelWriter(bio, engine='openpyxl') as w:
                         df_view.to_excel(w, index=False, sheet_name=limpiar_nombre_excel(d['id_unico']))
-                    st.download_button("📥 Excel Ruta", bio.getvalue(), f"Ruta_{limpiar_nombre_excel(d['id_unico'])}.xlsx", key=f"dl_{d['id_unico']}")
+                    st.download_button("📥 Descargar Excel de esta Ruta", bio.getvalue(), f"Ruta_{limpiar_nombre_excel(d['id_unico'])}.xlsx", key=f"dl_{d['id_unico']}")
                 st.divider()
 
-        if data_global:
-            st.markdown("### 💾 Reporte General")
-            df_glob = pd.DataFrame(data_global)
+    # --- PESTAÑA 3: RESUMEN GENERAL ---
+    with tab_resumen:
+        st.markdown("### Tabla Resumen Operativo")
+        st.info("Este es el resumen general de todas las rutas generadas, mostrando los horarios reales de finalización para auditar el cumplimiento.")
+        
+        df_resumen = pd.DataFrame(data_resumen_general)
+        st.dataframe(df_resumen, use_container_width=True)
+        
+        # Botón para descargar SÓLO el resumen
+        bio_resumen = io.BytesIO()
+        with pd.ExcelWriter(bio_resumen, engine='openpyxl') as w:
+            df_resumen.to_excel(w, index=False, sheet_name="Resumen")
+        
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            st.download_button("📥 DESCARGAR SOLO RESUMEN", bio_resumen.getvalue(), "Resumen_General.xlsx", type="secondary", use_container_width=True)
+            
+        # Botón para descargar el CRONOGRAMA COMPLETO (Sábana de datos)
+        if data_global_detallada:
+            df_glob = pd.DataFrame(data_global_detallada)
             bio_g = io.BytesIO()
             with pd.ExcelWriter(bio_g, engine='openpyxl') as w:
-                df_glob.to_excel(w, index=False, sheet_name="Master")
-            st.download_button("📥 DESCARGAR CRONOGRAMA MAESTRO", bio_g.getvalue(), "Cronograma_Completo.xlsx", type="primary", use_container_width=True)
+                df_glob.to_excel(w, index=False, sheet_name="Cronograma Detallado")
+                df_resumen.to_excel(w, index=False, sheet_name="Resumen General") # Agregamos ambas hojas al maestro
+            with col_btn2:
+                st.download_button("📥 DESCARGAR CRONOGRAMA MAESTRO (Completo)", bio_g.getvalue(), "Cronograma_Maestro.xlsx", type="primary", use_container_width=True)
