@@ -79,12 +79,11 @@ def obtener_matriz_masiva(lista_coords, headers):
     else:
         matriz_dist = []
         matriz_dur = []
-        vel_ms = 6.94 # Aprox 25 km/h promedio en ciudad
+        vel_ms = 6.94 
         for p1 in lista_coords:
             f_dist = []
             f_dur = []
             for p2 in lista_coords:
-                # El multiplicador 1.3 compensa que las calles no son líneas rectas perfectas
                 dist_m = haversine((p1[1], p1[0]), (p2[1], p2[0]), unit=Unit.METERS) * 1.3
                 f_dist.append(dist_m)
                 f_dur.append(dist_m / vel_ms)
@@ -217,7 +216,7 @@ if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"
 elif tipo_ruteo == "Creación de rutas propias":
     st.sidebar.markdown("---")
     st.sidebar.header("Configuración de Flota Automática")
-    st.sidebar.info("La IA agrupará los puntos y creará los vehículos necesarios para cumplir el horario de llegada.")
+    st.sidebar.info("La IA maximizará la carga de cada vehículo para usar la menor cantidad posible y equilibrará los tiempos de viaje entre ellos.")
     
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
@@ -238,9 +237,10 @@ elif tipo_ruteo == "Creación de rutas propias":
         st.sidebar.error("❌ El horario de llegada debe ser mayor al de salida.")
         st.stop()
 
+
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Procesando datos masivos... (El sistema creará las rutas necesarias automáticamente)"):
+    with st.spinner("Optimizando flota... (Dándole 15 segundos a la IA para equilibrar perfectamente los tiempos)"):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -295,7 +295,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                             
                             search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
+                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
                             solution = routing.SolveWithParameters(search_parameters)
                             
                             if solution:
@@ -348,7 +348,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         st.error(f"Error trazando calles de {ruta}: {err_dirs}")
 
         # ==========================================================
-        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS MASIVAS (VRP Múltiple)
+        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS MASIVAS (VRP Múltiple Equilibrado)
         # ==========================================================
         elif tipo_ruteo == "Creación de rutas propias":
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
@@ -376,7 +376,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     matriz_dist.append([0] * (num_locs + 1))
                     matriz_dur.append([0] * (num_locs + 1))
                     
-                    # Le damos muchísimos vehículos disponibles a la IA
                     num_vehicles = num_locs 
                     manager = pywrapcp.RoutingIndexManager(num_locs + 1, num_vehicles, [dummy_idx] * num_vehicles, [int(end_idx)] * num_vehicles)
                     routing = pywrapcp.RoutingModel(manager)
@@ -394,23 +393,21 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         return drive_time + wait_time
                     time_callback_index = routing.RegisterTransitCallback(time_callback)
                     
-                    # Restricción rígida de tiempo para forzar la creación de nuevos autos
+                    # 1. Límite estricto de llegada
                     routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
+                    time_dimension = routing.GetDimensionOrDie("Time")
                     
-                    # PENALIZACIÓN MILLONARIA: Obliga a la IA a visitar todos los puntos
-                    penalty = 10000000
-                    for node in range(num_locs + 1):
-                        if node != dummy_idx and node != end_idx:
-                            routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
-
-                    # COSTO FIJO: Asegura que use la menor cantidad de autos posibles
-                    routing.SetFixedCostOfAllVehicles(50000)
+                    # 2. EQUILIBRIO DE CARGA: Fuerza a que los autos trabajen horas similares
+                    time_dimension.SetGlobalSpanCostCoefficient(100)
+                    
+                    # 3. MINIMIZACIÓN EXTREMA DE AUTOS: Penalización millonaria por sacar un auto del depósito
+                    routing.SetFixedCostOfAllVehicles(1000000)
 
                     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                    # PARALLEL CHEAPEST INSERTION es excelente para armar rutas múltiples sin romper el algoritmo
                     search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
                     search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-                    search_parameters.time_limit.seconds = 8 # Le damos 8 seg de razonamiento a la IA
+                    # Le damos el doble de tiempo (15s) para que pueda equilibrar y compactar al máximo
+                    search_parameters.time_limit.seconds = 15 
                     
                     solution = routing.SolveWithParameters(search_parameters)
                     
