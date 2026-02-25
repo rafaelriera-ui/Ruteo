@@ -15,13 +15,18 @@ import time
 st.set_page_config(page_title="Gestor de Rutas Logísticas", layout="wide")
 st.title("🚚 Gestor de Rutas y Capas")
 
-# --- API KEY PREDETERMINADA ---
-api_key = "5b3ce3597851110001cf62480080f4189d6143db946e7c7267b9343d"
+# --- API KEY PREDETERMINADA Y PERSONALIZADA ---
+api_key_default = "5b3ce3597851110001cf62480080f4189d6143db946e7c7267b9343d"
+
+st.sidebar.header("🔑 Conexión OpenRouteService")
+api_key_user = st.sidebar.text_input("API Key propia (Solo si te quedas sin saldo diario)", type="password", help="Si te sale el error 'Quota exceeded', pega aquí tu propia API Key.")
+api_key = api_key_user if api_key_user else api_key_default
 
 if 'calculo_terminado' not in st.session_state:
     st.session_state['calculo_terminado'] = False
 
 # --- BARRA LATERAL: CARGA ---
+st.sidebar.markdown("---")
 st.sidebar.header("Carga de Datos")
 archivo_subido = st.sidebar.file_uploader("Sube tu archivo Excel", type=["xlsx", "xls"])
 
@@ -66,28 +71,32 @@ def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, most
         ).add_to(capa)
         capa.add_to(mapa)
 
-# --- SISTEMA DE CONEXIÓN PURA CON PAUSA INTELIGENTE ---
+# --- CONEXIÓN 100% PURA CON ABORTO INSTANTÁNEO POR QUOTA ---
 def pedir_matriz_ors_con_reintento(body, headers):
-    for intento in range(5): # Intenta 5 veces si hay bloqueo de velocidad
+    for intento in range(3):
         resp = requests.post('https://api.openrouteservice.org/v2/matrix/driving-car', json=body, headers=headers)
         if resp.status_code == 200:
             return resp.json(), None
-        elif resp.status_code == 429 or "Rate limit" in resp.text or "Quota" in resp.text:
-            time.sleep(65) # Espera 65 segs a que la API nos perdone y recargue el límite por minuto
+        elif "Quota" in resp.text or resp.status_code == 403:
+            return None, "QUOTA_EXCEEDED" # Aborta de inmediato, no hace esperar 30 mins
+        elif resp.status_code == 429 or "Rate limit" in resp.text:
+            time.sleep(60) # Bloqueo temporal por velocidad, aquí sí conviene esperar
         else:
             return None, resp.text
-    return None, "Se agotó el límite diario de la API o hay un error de conexión."
+    return None, "Superado el límite de reintentos."
 
 def pedir_trazado_ors_con_reintento(body, headers):
-    for intento in range(5):
+    for intento in range(3):
         resp = requests.post('https://api.openrouteservice.org/v2/directions/driving-car/geojson', json=body, headers=headers)
         if resp.status_code == 200:
             return resp.json(), None
-        elif resp.status_code == 429 or "Rate limit" in resp.text or "Quota" in resp.text:
-            time.sleep(65)
+        elif "Quota" in resp.text or resp.status_code == 403:
+            return None, "QUOTA_EXCEEDED"
+        elif resp.status_code == 429 or "Rate limit" in resp.text:
+            time.sleep(60)
         else:
             return None, resp.text
-    return None, "Se agotó el límite diario de la API o hay un error de conexión."
+    return None, "Superado el límite de reintentos."
 
 def obtener_matriz_masiva(lista_coords, headers):
     N = len(lista_coords)
@@ -98,10 +107,9 @@ def obtener_matriz_masiva(lista_coords, headers):
             return data['distances'], data['durations'], None
         return None, None, err
     else:
-        # COSTURA DE MATRICES (Tiempos Reales de Calle, fraccionado para la API)
+        # COSTURA DE MATRICES (Mantiene exactitud 100% en Creación de Rutas Propias)
         matriz_dist = [[0.0] * N for _ in range(N)]
         matriz_dur = [[0.0] * N for _ in range(N)]
-        
         chunk_size = 25 
         for i in range(0, N, chunk_size):
             for j in range(0, N, chunk_size):
@@ -109,46 +117,33 @@ def obtener_matriz_masiva(lista_coords, headers):
                 dst_chunk = lista_coords[j : j+chunk_size]
                 
                 locs = []
-                src_indices = []
-                dst_indices = []
+                src_indices, dst_indices = [], []
                 
                 for pt in src_chunk:
                     if pt not in locs: locs.append(pt)
                     src_indices.append(locs.index(pt))
-                    
                 for pt in dst_chunk:
                     if pt not in locs: locs.append(pt)
                     dst_indices.append(locs.index(pt))
                     
-                body_matrix = {
-                    "locations": locs,
-                    "sources": src_indices,
-                    "destinations": dst_indices,
-                    "metrics": ["distance", "duration"]
-                }
-                
+                body_matrix = {"locations": locs, "sources": src_indices, "destinations": dst_indices, "metrics": ["distance", "duration"]}
                 data, err = pedir_matriz_ors_con_reintento(body_matrix, headers)
                 if data:
-                    dists = data['distances']
-                    durs = data['durations']
+                    dists, durs = data['distances'], data['durations']
                     for u in range(len(src_chunk)):
                         for v in range(len(dst_chunk)):
                             matriz_dist[i+u][j+v] = dists[u][v]
                             matriz_dur[i+u][j+v] = durs[u][v]
                 else:
-                    return None, None, f"Error en ORS Matrix (Bloque {i}-{j}): {err}"
-                
+                    return None, None, err
                 time.sleep(1.5) 
-                
         return matriz_dist, matriz_dur, None
 
 def obtener_trazado_masivo(coords_ordenadas, headers):
-    total_dist = 0
-    total_dur = 0
-    all_segments = []
-    merged_coordinates = []
-    
+    total_dist, total_dur = 0, 0
+    all_segments, merged_coordinates = [], []
     chunk_size = 40
+    
     for i in range(0, len(coords_ordenadas) - 1, chunk_size - 1):
         chunk = coords_ordenadas[i:i + chunk_size]
         if len(chunk) < 2: break
@@ -164,24 +159,19 @@ def obtener_trazado_masivo(coords_ordenadas, headers):
             total_dist += props['distance']
             total_dur += props['duration']
             all_segments.extend(segs)
-            
             if not merged_coordinates:
                 merged_coordinates.extend(geom)
             else:
                 merged_coordinates.extend(geom[1:])
         else:
             return None, err
-            
         time.sleep(1.5)
             
     fake_geojson = {
         "type": "FeatureCollection",
         "features": [{
             "type": "Feature",
-            "properties": {
-                "summary": {"distance": total_dist, "duration": total_dur},
-                "segments": all_segments
-            },
+            "properties": {"summary": {"distance": total_dist, "duration": total_dur}, "segments": all_segments},
             "geometry": {"type": "LineString", "coordinates": merged_coordinates}
         }]
     }
@@ -288,7 +278,7 @@ elif tipo_ruteo == "Creación de rutas propias":
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Conectando 100% con OpenRouteService... (Puede demorar varios minutos si el sistema hace pausas automáticas para evitar el bloqueo de la API)"):
+    with st.spinner("Conectando 100% con OpenRouteService..."):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -299,7 +289,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
         headers = {'Authorization': api_key, 'Content-Type': 'application/json'}
 
         # ==========================================================
-        # LÓGICA 1 Y 2: RUTEO CLÁSICO Y OPTIMIZADO (100% ORS)
+        # LÓGICA 1 Y 2: RUTEO CLÁSICO Y OPTIMIZADO (CON MICRO-CORTES)
         # ==========================================================
         if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"]:
             for dia in dias_seleccionados:
@@ -325,43 +315,70 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         nodos_ordenados = list(range(len(df_ruta)))
                         coords_ordenadas = lista_coords
                     else: 
-                        matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
-                        if not err_matriz:
-                            num_locs = len(matriz_dist)
+                        # --- MAGIA APLICADA: MICRO-CORTES DE 40 PUNTOS PARA AHORRAR API ---
+                        chunk_size_opt = 40
+                        for i in range(0, len(lista_coords), chunk_size_opt):
+                            chunk_coords = lista_coords[i:i+chunk_size_opt]
+                            original_indices = list(range(i, i+len(chunk_coords)))
                             
-                            if punto_final_fijo:
-                                end_node = indices_puntos_finales.get(id_unico, num_locs - 1)
-                                manager = pywrapcp.RoutingIndexManager(num_locs, 1, [0], [int(end_node)])
-                            else:
-                                manager = pywrapcp.RoutingIndexManager(num_locs, 1, 0)
-                                
-                            routing = pywrapcp.RoutingModel(manager)
-                            
-                            def distance_callback(from_index, to_index):
-                                return int(matriz_dist[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
-                            transit_callback_index = routing.RegisterTransitCallback(distance_callback)
-                            routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-                            
-                            search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
-                            solution = routing.SolveWithParameters(search_parameters)
-                            
-                            if solution:
-                                index = routing.Start(0)
-                                while not routing.IsEnd(index):
-                                    nodos_ordenados.append(manager.IndexToNode(index))
-                                    index = solution.Value(routing.NextVar(index))
-                                if punto_final_fijo:
-                                    nodos_ordenados.append(manager.IndexToNode(index))
-                                coords_ordenadas = [lista_coords[i] for i in nodos_ordenados]
-                            else:
-                                st.error(f"No se encontró solución de optimización para {ruta}")
+                            if len(chunk_coords) < 2:
+                                nodos_ordenados.extend(original_indices)
                                 continue
-                        else:
-                            st.error(f"Error Matriz en {ruta}: {err_matriz}")
-                            continue
+                                
+                            matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(chunk_coords, headers)
+                            
+                            if err_matriz == "QUOTA_EXCEEDED":
+                                st.error(f"❌ ¡SALDO DIARIO AGOTADO en la ruta {ruta}! Pega tu propia clave en el menú lateral para continuar.")
+                                st.stop()
+                                
+                            if not err_matriz:
+                                num_locs = len(chunk_coords)
+                                is_last_chunk = (i + chunk_size_opt >= len(lista_coords))
+                                has_local_end = False
+                                
+                                if is_last_chunk and punto_final_fijo:
+                                    global_end_idx = indices_puntos_finales.get(id_unico, len(lista_coords)-1)
+                                    if global_end_idx in original_indices:
+                                        local_end_idx = original_indices.index(global_end_idx)
+                                        manager = pywrapcp.RoutingIndexManager(num_locs, 1, [0], [local_end_idx])
+                                        has_local_end = True
+                                    else:
+                                        manager = pywrapcp.RoutingIndexManager(num_locs, 1, 0)
+                                else:
+                                    manager = pywrapcp.RoutingIndexManager(num_locs, 1, 0)
+                                    
+                                routing = pywrapcp.RoutingModel(manager)
+                                
+                                def distance_callback(from_index, to_index):
+                                    return int(matriz_dist[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
+                                transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+                                routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+                                
+                                search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+                                search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                                solution = routing.SolveWithParameters(search_parameters)
+                                
+                                if solution:
+                                    idx = routing.Start(0)
+                                    while not routing.IsEnd(idx):
+                                        nodos_ordenados.append(original_indices[manager.IndexToNode(idx)])
+                                        idx = solution.Value(routing.NextVar(idx))
+                                    if has_local_end:
+                                        nodos_ordenados.append(original_indices[manager.IndexToNode(idx)])
+                                else:
+                                    nodos_ordenados.extend(original_indices)
+                            else:
+                                st.error(f"Error Matriz en tramo de {ruta}: {err_matriz}")
+                                nodos_ordenados.extend(original_indices)
+                                
+                        coords_ordenadas = [lista_coords[idx] for idx in nodos_ordenados]
 
                     geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
+                    
+                    if err_dirs == "QUOTA_EXCEEDED":
+                        st.error(f"❌ ¡SALDO DIARIO AGOTADO al dibujar la ruta {ruta}! Pega tu propia clave en el menú lateral.")
+                        st.stop()
+                        
                     if not err_dirs:
                         props = geojson['features'][0]['properties']['summary']
                         segments = geojson['features'][0]['properties'].get('segments', [])
@@ -396,7 +413,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         st.error(f"Error trazando calles de {ruta}: {err_dirs}")
 
         # ==========================================================
-        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS (100% ORS)
+        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS (INTACTA)
         # ==========================================================
         elif tipo_ruteo == "Creación de rutas propias":
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
@@ -416,6 +433,10 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
 
                 matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
                 
+                if err_matriz == "QUOTA_EXCEEDED":
+                    st.error(f"❌ ¡SALDO DIARIO AGOTADO en el Día {dia}! Pega tu propia clave en el menú lateral para continuar.")
+                    st.stop()
+                    
                 if not err_matriz:
                     dummy_idx = num_locs
                     for i in range(num_locs):
@@ -496,6 +517,10 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             
                             geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
                             
+                            if err_dirs == "QUOTA_EXCEEDED":
+                                st.error(f"❌ ¡SALDO DIARIO AGOTADO al dibujar {ruta_nombre}! Pega tu propia clave en el menú lateral.")
+                                st.stop()
+                                
                             if not err_dirs:
                                 props = geojson['features'][0]['properties']['summary']
                                 segments = geojson['features'][0]['properties'].get('segments', [])
