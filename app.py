@@ -249,7 +249,7 @@ if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"
 elif tipo_ruteo == "Creación de rutas propias":
     st.sidebar.markdown("---")
     st.sidebar.header("Configuración de Flota Automática")
-    st.sidebar.info("Modo Pétalo Activado: La IA evitará rutas cruzadas y agrupará las entregas en forma circular.")
+    st.sidebar.info("Modo Pétalo + Equilibrador: Las rutas serán lógicas y los autos terminarán en horarios similares.")
     
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
@@ -272,7 +272,7 @@ elif tipo_ruteo == "Creación de rutas propias":
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("IA Logística: Formando clústeres circulares para evitar idas y vueltas... (20 segs)"):
+    with st.spinner("IA Logística: Formando clústeres circulares y equilibrando horarios... (20 segs)"):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -327,7 +327,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                             
                             search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                            # AQUÍ TAMBIÉN CAMBIAMOS A SAVINGS PARA RUTAS INDIVIDUALES MÁS LÓGICAS
                             search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
                             solution = routing.SolveWithParameters(search_parameters)
                             
@@ -379,7 +378,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         fg_trazado.add_to(mapa_calculado)
 
         # ==========================================================
-        # LÓGICA 3: CREACIÓN DE RUTAS (NUEVO ALGORITMO SAVINGS)
+        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS
         # ==========================================================
         elif tipo_ruteo == "Creación de rutas propias":
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
@@ -440,10 +439,15 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     time_callback_index = routing.RegisterTransitCallback(time_callback)
                     
                     routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
+                    
+                    # --- EL AJUSTE MAESTRO: EQUILIBRADOR SUAVE DE CARGAS ---
+                    time_dimension = routing.GetDimensionOrDie("Time")
+                    # Un coeficiente de 50 es ideal: Le indica a la IA que si un auto termina muy temprano,
+                    # trate de tomar algunos paquetes de los demás autos para nivelarlos, PERO sin que esto
+                    # sea excusa para crear un auto nuevo (ya que eso sigue costando 10 millones).
+                    time_dimension.SetGlobalSpanCostCoefficient(50)
 
                     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                    
-                    # CAMBIO MAGISTRAL AQUÍ: SAVINGS crea rutas circulares y lógicas, evitando los cruces de líneas tipo Pac-Man.
                     search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
                     search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
                     search_parameters.time_limit.seconds = 20 
