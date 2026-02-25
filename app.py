@@ -71,32 +71,46 @@ def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, most
         ).add_to(capa)
         capa.add_to(mapa)
 
-# --- CONEXIÓN 100% PURA CON ABORTO INSTANTÁNEO POR QUOTA ---
+# --- CONEXIÓN PURA BLINDADA CONTRA CAÍDAS DE SERVIDOR (504, 502, Unknown Profile) ---
 def pedir_matriz_ors_con_reintento(body, headers):
-    for intento in range(3):
-        resp = requests.post('https://api.openrouteservice.org/v2/matrix/driving-car', json=body, headers=headers)
-        if resp.status_code == 200:
-            return resp.json(), None
-        elif "Quota" in resp.text or resp.status_code == 403:
-            return None, "QUOTA_EXCEEDED" # Aborta de inmediato, no hace esperar 30 mins
-        elif resp.status_code == 429 or "Rate limit" in resp.text:
-            time.sleep(60) # Bloqueo temporal por velocidad, aquí sí conviene esperar
-        else:
-            return None, resp.text
-    return None, "Superado el límite de reintentos."
+    for intento in range(5): # Hasta 5 intentos si el servidor tose
+        try:
+            resp = requests.post('https://api.openrouteservice.org/v2/matrix/driving-car', json=body, headers=headers, timeout=45)
+            if resp.status_code == 200:
+                return resp.json(), None
+            elif "Quota" in resp.text or resp.status_code == 403:
+                return None, "QUOTA_EXCEEDED"
+            elif resp.status_code == 429 or "Rate limit" in resp.text:
+                time.sleep(60) # Bloqueo por velocidad, esperamos 1 minuto
+            elif resp.status_code >= 500 or "unknown" in resp.text.lower():
+                # Servidor caído (504) o bug temporal de ORS. Esperamos 5 segs y reintentamos.
+                time.sleep(5)
+            else:
+                return None, resp.text
+        except requests.exceptions.RequestException:
+            # Si el servidor directamente no responde (Timeout)
+            time.sleep(5)
+            
+    return None, "Superado el límite de reintentos. El servidor de mapas mundial está caído temporalmente."
 
 def pedir_trazado_ors_con_reintento(body, headers):
-    for intento in range(3):
-        resp = requests.post('https://api.openrouteservice.org/v2/directions/driving-car/geojson', json=body, headers=headers)
-        if resp.status_code == 200:
-            return resp.json(), None
-        elif "Quota" in resp.text or resp.status_code == 403:
-            return None, "QUOTA_EXCEEDED"
-        elif resp.status_code == 429 or "Rate limit" in resp.text:
-            time.sleep(60)
-        else:
-            return None, resp.text
-    return None, "Superado el límite de reintentos."
+    for intento in range(5):
+        try:
+            resp = requests.post('https://api.openrouteservice.org/v2/directions/driving-car/geojson', json=body, headers=headers, timeout=45)
+            if resp.status_code == 200:
+                return resp.json(), None
+            elif "Quota" in resp.text or resp.status_code == 403:
+                return None, "QUOTA_EXCEEDED"
+            elif resp.status_code == 429 or "Rate limit" in resp.text:
+                time.sleep(60)
+            elif resp.status_code >= 500 or "unknown" in resp.text.lower():
+                time.sleep(5)
+            else:
+                return None, resp.text
+        except requests.exceptions.RequestException:
+            time.sleep(5)
+            
+    return None, "Superado el límite de reintentos. El servidor de mapas mundial está caído temporalmente."
 
 def obtener_matriz_masiva(lista_coords, headers):
     N = len(lista_coords)
@@ -107,7 +121,6 @@ def obtener_matriz_masiva(lista_coords, headers):
             return data['distances'], data['durations'], None
         return None, None, err
     else:
-        # COSTURA DE MATRICES (Mantiene exactitud 100% en Creación de Rutas Propias)
         matriz_dist = [[0.0] * N for _ in range(N)]
         matriz_dur = [[0.0] * N for _ in range(N)]
         chunk_size = 25 
@@ -278,7 +291,7 @@ elif tipo_ruteo == "Creación de rutas propias":
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Conectando 100% con OpenRouteService..."):
+    with st.spinner("Conectando 100% con OpenRouteService... (Protección anti-caídas activada)"):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -289,7 +302,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
         headers = {'Authorization': api_key, 'Content-Type': 'application/json'}
 
         # ==========================================================
-        # LÓGICA 1 Y 2: RUTEO CLÁSICO Y OPTIMIZADO (CON MICRO-CORTES)
+        # LÓGICA 1 Y 2: RUTEO CLÁSICO Y OPTIMIZADO
         # ==========================================================
         if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"]:
             for dia in dias_seleccionados:
@@ -315,7 +328,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         nodos_ordenados = list(range(len(df_ruta)))
                         coords_ordenadas = lista_coords
                     else: 
-                        # --- MAGIA APLICADA: MICRO-CORTES DE 40 PUNTOS PARA AHORRAR API ---
                         chunk_size_opt = 40
                         for i in range(0, len(lista_coords), chunk_size_opt):
                             chunk_coords = lista_coords[i:i+chunk_size_opt]
@@ -413,7 +425,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         st.error(f"Error trazando calles de {ruta}: {err_dirs}")
 
         # ==========================================================
-        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS (INTACTA)
+        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS 
         # ==========================================================
         elif tipo_ruteo == "Creación de rutas propias":
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
