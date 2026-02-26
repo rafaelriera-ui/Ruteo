@@ -75,7 +75,7 @@ def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, most
 def pedir_matriz_ors_con_reintento(body, headers):
     for intento in range(5): 
         try:
-            resp = requests.post('https://api.openrouteservice.org/v2/matrix/driving-car', json=body, headers=headers, timeout=45)
+            resp = requests.post('https://api.openrouteservice.org/v2/matrix/driving-car', json=body, headers=headers, timeout=70)
             if resp.status_code == 200:
                 return resp.json(), None
             elif "Quota" in resp.text or resp.status_code == 403:
@@ -93,7 +93,7 @@ def pedir_matriz_ors_con_reintento(body, headers):
 def pedir_trazado_ors_con_reintento(body, headers):
     for intento in range(5):
         try:
-            resp = requests.post('https://api.openrouteservice.org/v2/directions/driving-car/geojson', json=body, headers=headers, timeout=45)
+            resp = requests.post('https://api.openrouteservice.org/v2/directions/driving-car/geojson', json=body, headers=headers, timeout=70)
             if resp.status_code == 200:
                 return resp.json(), None
             elif "Quota" in resp.text or resp.status_code == 403:
@@ -119,7 +119,8 @@ def obtener_matriz_masiva(lista_coords, headers):
     else:
         matriz_dist = [[0.0] * N for _ in range(N)]
         matriz_dur = [[0.0] * N for _ in range(N)]
-        chunk_size = 25 
+        
+        chunk_size = 15 
         for i in range(0, N, chunk_size):
             for j in range(0, N, chunk_size):
                 src_chunk = lista_coords[i : i+chunk_size]
@@ -145,7 +146,7 @@ def obtener_matriz_masiva(lista_coords, headers):
                             matriz_dur[i+u][j+v] = durs[u][v]
                 else:
                     return None, None, err
-                time.sleep(1.5) 
+                time.sleep(1.2) 
         return matriz_dist, matriz_dur, None
 
 def obtener_trazado_masivo(coords_ordenadas, headers):
@@ -225,7 +226,6 @@ df_filtrado_dias = df[df['Día'].isin(dias_seleccionados)]
 st.sidebar.markdown("---")
 st.sidebar.header("2. Estrategia de Ruteo")
 
-# AHORA TENEMOS 4 OPCIONES
 tipo_ruteo = st.sidebar.radio(
     "Selecciona cómo armar las rutas:",
     [
@@ -280,9 +280,9 @@ elif "Creación de rutas propias" in tipo_ruteo:
     st.sidebar.header("Configuración de Flota Automática")
     
     if "Departamentos" in tipo_ruteo:
-        st.sidebar.info("🏢 Modo Departamentos: La IA intentará agrupar los puntos del mismo departamento, penalizando los cruces de frontera, pero garantizando horario y ahorro de flota.")
+        st.sidebar.info("🏢 Modo Departamentos: La IA unirá departamentos para ahorrar vehículos, pero terminará de visitar todos los puntos de una zona antes de cruzar a la siguiente.")
     else:
-        st.sidebar.info("🚀 Modo Ideal Libre: La IA ignorará las divisiones políticas y agrupará solo por distancia y tiempo para lograr la máxima eficiencia posible.")
+        st.sidebar.info("🚀 Modo Ideal Libre: Ignora fronteras geográficas. Prioriza eficiencia pura, kilómetros y ahorro máximo de vehículos.")
         
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
@@ -305,7 +305,7 @@ elif "Creación de rutas propias" in tipo_ruteo:
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Calculando red logística y tiempos reales..."):
+    with st.spinner("Procesando inteligencia logística 100% sobre calles reales..."):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -488,12 +488,12 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         if i != dummy_idx and i != end_idx:
                             val_dur = matriz_dur[i][end_idx]
                             if val_dur is None:
-                                st.error(f"❌ Error de Mapa: El punto '{df_dia.iloc[i]['Lugar']}' no tiene conexión por calle. Corrige la coordenada en tu Excel.")
+                                st.error(f"❌ Error de Mapa: El punto '{df_dia.iloc[i]['Lugar']}' no tiene conexión por calle.")
                                 st.stop()
                                 
                             tiempo_minimo_viaje = int(min_parada_vrp * 60) + int(val_dur)
                             if tiempo_minimo_viaje > max_time_sec:
-                                st.error(f"❌ Error Físico Real: Ir desde '{df_dia.iloc[i]['Lugar']}' hasta el destino final toma por sí solo {tiempo_minimo_viaje//60} min reales, superando tu límite de {max_time_sec//60} min.")
+                                st.error(f"❌ Error Físico Real: Ir desde '{df_dia.iloc[i]['Lugar']}' hasta el destino final toma por sí solo {tiempo_minimo_viaje//60} min reales de viaje por calle, superando tu límite de {max_time_sec//60} min.")
                                 st.stop()
 
                     num_vehicles = num_locs 
@@ -506,18 +506,19 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         val = matriz_dist[from_node][to_node]
                         dist = int(val) if val is not None else 99999999 
                         
-                        # Penalización por abrir un auto (Prioridad Absoluta 1)
+                        # Penalidad 1: Abrir un auto nuevo (Prioridad Absoluta para ahorrar flota)
                         if from_node == dummy_idx and to_node != end_idx:
                             return dist + 10000000 
                             
-                        # Penalización opcional por romper departamentos (Prioridad Secundaria)
+                        # Penalidad 2: Impuesto de Frontera Departamental
+                        # Si elige el modo Departamentos, cruzar a otro municipio cuesta 500,000 pts extra.
+                        # Esto obliga al auto a "barrer" por completo un departamento antes de pasar al siguiente.
                         if tipo_ruteo == "Creación de rutas propias (Por Departamentos)":
-                            if from_node < num_locs and to_node < num_locs and from_node != end_idx and to_node != end_idx:
+                            if from_node < num_locs and to_node < num_locs and from_node != end_idx and to_node != end_idx and from_node != dummy_idx:
                                 dept_f = str(df_dia.iloc[from_node].get('Departamento', '')).strip().lower()
                                 dept_t = str(df_dia.iloc[to_node].get('Departamento', '')).strip().lower()
-                                # Si cambian de dpto, le sumamos 100km ficticios para evitar que lo haga salvo fuerza mayor
                                 if dept_f and dept_t and dept_f != dept_t:
-                                    dist += 100000 
+                                    dist += 500000 
                                     
                         return dist
                         
@@ -535,7 +536,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     time_callback_index = routing.RegisterTransitCallback(time_callback)
                     
                     routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
-                    
                     time_dimension = routing.GetDimensionOrDie("Time")
                     time_dimension.SetGlobalSpanCostCoefficient(50)
 
@@ -548,7 +548,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     
                     if solution:
                         vehiculo_real_count = 1
-                        
                         for vehicle_id in range(num_vehicles):
                             index = routing.Start(vehicle_id)
                             first_visit = solution.Value(routing.NextVar(index))
@@ -575,7 +574,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
                             
                             if err_dirs == "QUOTA_EXCEEDED":
-                                st.error(f"❌ ¡SALDO DIARIO AGOTADO al dibujar {ruta_nombre}! Pega tu propia clave en el menú lateral.")
+                                st.error(f"❌ ¡SALDO DIARIO AGOTADO al dibujar {ruta_nombre}! Pega tu propia clave.")
                                 st.stop()
                                 
                             if not err_dirs:
@@ -612,7 +611,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             else:
                                 st.error(f"Error en trazado: {err_dirs}")
                     else:
-                        st.error(f"❌ Imposible matemático en el {dia}. La IA no pudo encajar todos los puntos antes de la hora límite. Intenta subir el límite de llegada 30 minutos.")
+                        st.error(f"❌ Imposible matemático en el {dia}. La IA no pudo encajar todos los puntos.")
                 else:
                     st.error(f"Error Matriz {dia}: {err_matriz}")
 
