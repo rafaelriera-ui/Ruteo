@@ -225,9 +225,15 @@ df_filtrado_dias = df[df['Día'].isin(dias_seleccionados)]
 st.sidebar.markdown("---")
 st.sidebar.header("2. Estrategia de Ruteo")
 
+# AHORA TENEMOS 4 OPCIONES
 tipo_ruteo = st.sidebar.radio(
     "Selecciona cómo armar las rutas:",
-    ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)", "Creación de rutas propias"]
+    [
+        "Ruteo según Excel (Orden Original)", 
+        "Ruteo Optimizado (IA)", 
+        "Creación de rutas propias (Ideal Libre)",
+        "Creación de rutas propias (Por Departamentos)"
+    ]
 )
 
 opciones_inicio_dict = {}
@@ -269,10 +275,15 @@ if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"
                         opciones_fin_dict[id_ruta] = sel_fin
                         st.sidebar.markdown("<br>", unsafe_allow_html=True)
 
-elif tipo_ruteo == "Creación de rutas propias":
+elif "Creación de rutas propias" in tipo_ruteo:
     st.sidebar.markdown("---")
     st.sidebar.header("Configuración de Flota Automática")
     
+    if "Departamentos" in tipo_ruteo:
+        st.sidebar.info("🏢 Modo Departamentos: La IA intentará agrupar los puntos del mismo departamento, penalizando los cruces de frontera, pero garantizando horario y ahorro de flota.")
+    else:
+        st.sidebar.info("🚀 Modo Ideal Libre: La IA ignorará las divisiones políticas y agrupará solo por distancia y tiempo para lograr la máxima eficiencia posible.")
+        
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
     
@@ -294,7 +305,7 @@ elif tipo_ruteo == "Creación de rutas propias":
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Procesando conectividad e IA... (Detectando calles cortadas o puntos aislados)"):
+    with st.spinner("Calculando red logística y tiempos reales..."):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -346,7 +357,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                 N = num_locs
                                 extended_dist = [[0] * (N + 2) for _ in range(N + 2)]
                                 
-                                # SOLUCIÓN AL TYPE_ERROR: Interceptamos los nulos y los volvemos "Imposibles"
                                 for i in range(N):
                                     for j in range(N):
                                         val = matriz_dist[i][j]
@@ -442,9 +452,9 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             st.error(f"Error trazando calles de {ruta}: {err_dirs}")
 
         # ==========================================================
-        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS
+        # LÓGICA 3 Y 4: CREACIÓN DE RUTAS PROPIAS (LIBRE VS DEPARTAMENTOS)
         # ==========================================================
-        elif tipo_ruteo == "Creación de rutas propias":
+        elif "Creación de rutas propias" in tipo_ruteo:
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
             
             for dia in dias_seleccionados:
@@ -474,17 +484,16 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     matriz_dist.append([0] * (num_locs + 1))
                     matriz_dur.append([0] * (num_locs + 1))
                     
-                    # SOLUCIÓN AL TYPE ERROR: Interceptamos si un lugar no tiene conexión física a calles
                     for i in range(num_locs):
                         if i != dummy_idx and i != end_idx:
                             val_dur = matriz_dur[i][end_idx]
                             if val_dur is None:
-                                st.error(f"❌ Error de Mapa: El punto '{df_dia.iloc[i]['Lugar']}' no tiene conexión por calle (está geolocalizado en medio del campo o un lugar inaccesible). La API no puede trazar una ruta hacia o desde allí. Corrige la coordenada en tu Excel.")
+                                st.error(f"❌ Error de Mapa: El punto '{df_dia.iloc[i]['Lugar']}' no tiene conexión por calle. Corrige la coordenada en tu Excel.")
                                 st.stop()
                                 
                             tiempo_minimo_viaje = int(min_parada_vrp * 60) + int(val_dur)
                             if tiempo_minimo_viaje > max_time_sec:
-                                st.error(f"❌ Error Físico Real: Ir desde '{df_dia.iloc[i]['Lugar']}' hasta el destino final toma por sí solo {tiempo_minimo_viaje//60} min reales de viaje por calle, superando tu límite total de {max_time_sec//60} min. Necesitas extender la hora de llegada.")
+                                st.error(f"❌ Error Físico Real: Ir desde '{df_dia.iloc[i]['Lugar']}' hasta el destino final toma por sí solo {tiempo_minimo_viaje//60} min reales, superando tu límite de {max_time_sec//60} min.")
                                 st.stop()
 
                     num_vehicles = num_locs 
@@ -495,10 +504,21 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         from_node = manager.IndexToNode(from_index)
                         to_node = manager.IndexToNode(to_index)
                         val = matriz_dist[from_node][to_node]
-                        dist = int(val) if val is not None else 99999999 # Filtro de vacíos
+                        dist = int(val) if val is not None else 99999999 
                         
+                        # Penalización por abrir un auto (Prioridad Absoluta 1)
                         if from_node == dummy_idx and to_node != end_idx:
                             return dist + 10000000 
+                            
+                        # Penalización opcional por romper departamentos (Prioridad Secundaria)
+                        if tipo_ruteo == "Creación de rutas propias (Por Departamentos)":
+                            if from_node < num_locs and to_node < num_locs and from_node != end_idx and to_node != end_idx:
+                                dept_f = str(df_dia.iloc[from_node].get('Departamento', '')).strip().lower()
+                                dept_t = str(df_dia.iloc[to_node].get('Departamento', '')).strip().lower()
+                                # Si cambian de dpto, le sumamos 100km ficticios para evitar que lo haga salvo fuerza mayor
+                                if dept_f and dept_t and dept_f != dept_t:
+                                    dist += 100000 
+                                    
                         return dist
                         
                     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
@@ -508,7 +528,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         from_node = manager.IndexToNode(from_index)
                         to_node = manager.IndexToNode(to_index)
                         val_dur = matriz_dur[from_node][to_node]
-                        drive_time = int(val_dur) if val_dur is not None else 99999999 # Filtro de vacíos
+                        drive_time = int(val_dur) if val_dur is not None else 99999999 
                         wait_time = int(min_parada_vrp * 60) if to_node != dummy_idx and to_node != end_idx else 0
                         return drive_time + wait_time
                         
@@ -625,7 +645,7 @@ if st.session_state['calculo_terminado']:
                 
                 default_h = datetime.time(9,0)
                 default_wait = 15
-                if tipo_ruteo == "Creación de rutas propias":
+                if "Creación de rutas" in tipo_ruteo:
                     default_h = hora_salida_vrp
                     default_wait = min_parada_vrp
                 
