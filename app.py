@@ -71,7 +71,7 @@ def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, most
         ).add_to(capa)
         capa.add_to(mapa)
 
-# --- CONEXIÓN PURA BLINDADA ---
+# --- CONEXIÓN PURA BLINDADA CONTRA CAÍDAS ---
 def pedir_matriz_ors_con_reintento(body, headers):
     for intento in range(5): 
         try:
@@ -379,13 +379,14 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                 def distance_callback(from_index, to_index):
                                     from_node = manager.IndexToNode(from_index)
                                     to_node = manager.IndexToNode(to_index)
-                                    return extended_dist[from_node][to_node]
+                                    return int(extended_dist[from_node][to_node])
                                     
                                 transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                                 routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                                 
                                 search_parameters = pywrapcp.DefaultRoutingSearchParameters()
                                 search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                                search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
                                 search_parameters.time_limit.seconds = 5 
                                 
                                 solution = routing.SolveWithParameters(search_parameters)
@@ -494,18 +495,20 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         val = matriz_dist[from_node][to_node]
                         dist = int(val) if val is not None else 99999999 
                         
+                        if from_node == dummy_idx and to_node != end_idx:
+                            return dist + 100000000 
+                            
                         if "Flexible" in tipo_ruteo:
                             if from_node < num_locs and to_node < num_locs and from_node != end_idx and to_node != end_idx and from_node != dummy_idx:
                                 dept_f = str(df_dia.iloc[from_node].get('Departamento', '')).strip().lower()
                                 dept_t = str(df_dia.iloc[to_node].get('Departamento', '')).strip().lower()
                                 if dept_f and dept_t and dept_f != dept_t:
                                     dist += 500000 
-                        return dist
+                        return int(dist)
                         
                     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                     
-                    # 🔴 PENALIDAD EXTREMA: ABRIR UN AUTO NUEVO CUESTA 100 MILLONES (Cero Sindicato)
                     routing.SetFixedCostOfAllVehicles(100000000)
                     
                     def time_callback(from_index, to_index):
@@ -514,13 +517,14 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         val_dur = matriz_dur[from_node][to_node]
                         drive_time = int(val_dur) if val_dur is not None else 99999999 
                         wait_time = int(min_parada_vrp * 60) if to_node != dummy_idx and to_node != end_idx else 0
-                        return drive_time + wait_time
+                        return int(drive_time + wait_time)
                         
                     time_callback_index = routing.RegisterTransitCallback(time_callback)
                     routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
 
                     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
                     search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                    search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
                     search_parameters.time_limit.seconds = 20 
                     
                     solution = routing.SolveWithParameters(search_parameters)
@@ -645,12 +649,12 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             to_node = manager.IndexToNode(to_index)
                             val = matriz_dist[from_node][to_node]
                             dist = int(val) if val is not None else 99999999 
-                            return dist
+                            if from_node == dummy_idx and to_node != end_idx: return dist + 100000000 
+                            return int(dist)
                             
                         transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                         routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                         
-                        # 🔴 MULTA EXTREMA DE AHORRO DE FLOTA
                         routing.SetFixedCostOfAllVehicles(100000000)
                         
                         def time_callback(from_index, to_index):
@@ -659,13 +663,14 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             val_dur = matriz_dur[from_node][to_node]
                             drive_time = int(val_dur) if val_dur is not None else 99999999 
                             wait_time = int(min_parada_vrp * 60) if to_node != dummy_idx and to_node != end_idx else 0
-                            return drive_time + wait_time
+                            return int(drive_time + wait_time)
                             
                         time_callback_index = routing.RegisterTransitCallback(time_callback)
                         routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
 
                         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
                         search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                        search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
                         search_parameters.time_limit.seconds = 10 
                         
                         solution = routing.SolveWithParameters(search_parameters)
@@ -728,7 +733,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         st.error(f"Error Matriz {dia} - {dept}: {err_matriz}")
 
         # ==========================================================
-        # LÓGICA 6, 7 Y 8: CREACIÓN DE RUTAS PROPIAS (PATRÓN MAESTRO - CON FILTRO DE FRECUENCIA Y RELOJ)
+        # LÓGICA 6, 7 Y 8: CREACIÓN DE RUTAS PROPIAS (PATRÓN MAESTRO - INTELIGENCIA TOTAL)
         # ==========================================================
         elif "Patrón Fijo" in tipo_ruteo:
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
@@ -746,10 +751,18 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
             matriz_dist_global, matriz_dur_global, err_matriz_glob = obtener_matriz_masiva(lista_coords_global, headers)
             if err_matriz_glob: st.error(err_matriz_glob); st.stop()
             
+            # LIMPIEZA DE DECIMALES OBLIGATORIA PARA EVITAR EL "SystemError" EN OR-TOOLS
             for i in range(len(matriz_dist_global)):
                 for j in range(len(matriz_dist_global[0])):
-                    if matriz_dist_global[i][j] is None: matriz_dist_global[i][j] = 99999999
-                    if matriz_dur_global[i][j] is None: matriz_dur_global[i][j] = 99999999
+                    if matriz_dist_global[i][j] is None: 
+                        matriz_dist_global[i][j] = 99999999
+                    else:
+                        matriz_dist_global[i][j] = int(matriz_dist_global[i][j])
+                        
+                    if matriz_dur_global[i][j] is None: 
+                        matriz_dur_global[i][j] = 99999999
+                    else:
+                        matriz_dur_global[i][j] = int(matriz_dur_global[i][j])
 
             def calc_route_time_on_day(ruta_locs, day):
                 locs_day = set(df_filtrado_dias[df_filtrado_dias['Día'] == day]['Lugar'])
@@ -776,14 +789,14 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                 subsets.append(("General", df_total_puntos['Lugar'].tolist()))
 
             for subset_name, subset_lugares in subsets:
-                # 1. FRECUENCIAS: ¿Cuántas veces aparece cada cliente de este sector?
+                # 1. FILTRO DE FRECUENCIA: ¿Cuántas veces aparece cada cliente?
                 freq_dict = df_filtrado_dias[(df_filtrado_dias['Lugar'].isin(subset_lugares))]['Lugar'].value_counts().to_dict()
                 if not freq_dict: continue
                 max_freq = max(freq_dict.values())
                 
                 master_routes_subset = None
                 
-                # 2. EL CICLO DE RECORTE: Vamos quitando a los que aparecen 1 vez, luego a los de 2 veces, hasta lograr que la flota encaje
+                # 2. EL CICLO DE RECORTE: Vamos quitando a los que aparecen 1 vez, luego a los de 2 veces, hasta lograr la flota perfecta
                 for threshold in range(1, max_freq + 2): 
                     core_lugares = [l for l, count in freq_dict.items() if count > threshold]
                     rare_lugares = [l for l, count in freq_dict.items() if count <= threshold]
@@ -797,18 +810,18 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     end_idx_sub = num_sub
                     dummy_idx = num_sub + 1
                     
-                    if num_sub < 1:
-                        rutas_core = [[core_lugares[0]]] if core_lugares else []
+                    if num_sub < 2:
+                        rutas_core = [[core_lugares[0]]] if num_sub == 1 else []
                     else:
                         sub_dist = [[0]*(num_sub+2) for _ in range(num_sub+2)]
                         sub_dur = [[0]*(num_sub+2) for _ in range(num_sub+2)]
                         
                         for i in range(num_sub):
                             for j in range(num_sub):
-                                sub_dist[i][j] = matriz_dist_global[core_indices[i]][core_indices[j]]
-                                sub_dur[i][j] = matriz_dur_global[core_indices[i]][core_indices[j]]
-                            sub_dist[i][end_idx_sub] = matriz_dist_global[core_indices[i]][end_idx_global]
-                            sub_dur[i][end_idx_sub] = matriz_dur_global[core_indices[i]][end_idx_global]
+                                sub_dist[i][j] = int(matriz_dist_global[core_indices[i]][core_indices[j]])
+                                sub_dur[i][j] = int(matriz_dur_global[core_indices[i]][core_indices[j]])
+                            sub_dist[i][end_idx_sub] = int(matriz_dist_global[core_indices[i]][end_idx_global])
+                            sub_dur[i][end_idx_sub] = int(matriz_dur_global[core_indices[i]][end_idx_global])
                             
                         for j in range(num_sub):
                             sub_dist[dummy_idx][j] = 0; sub_dur[dummy_idx][j] = 0
@@ -819,7 +832,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
 
                         def d_call(f, t):
                             fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
-                            dist = sub_dist[fn][tn]
+                            dist = int(sub_dist[fn][tn])
                             if fn == dummy_idx and tn != end_idx_sub: return dist + 100000000 
                             
                             if "Flexible" in tipo_ruteo:
@@ -833,12 +846,11 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         def t_call(f, t):
                             fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
                             wt = int(min_parada_vrp*60) if tn != dummy_idx and tn != end_idx_sub else 0
-                            return sub_dur[fn][tn] + wt
+                            return int(sub_dur[fn][tn]) + wt
 
                         transit_cb = routing.RegisterTransitCallback(d_call)
                         routing.SetArcCostEvaluatorOfAllVehicles(transit_cb)
                         
-                        # MULTA EXTREMA DE FLOTA (No se abren autos fantasma)
                         routing.SetFixedCostOfAllVehicles(100000000)
                         
                         time_cb = routing.RegisterTransitCallback(t_call)
@@ -862,7 +874,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                     idx = sol.Value(routing.NextVar(idx))
                                 rutas_core.append(nodos_ord)
                         else:
-                            continue # Si no pudo, sube el filtro de recorte para el siguiente intento
+                            continue # Sube el filtro para el siguiente intento
                             
                     # 3. INYECCIÓN CON RELOJ (Balanceo por Saturación)
                     success = True
@@ -919,7 +931,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         break # ¡Logramos la flota perfecta!
                         
                 if master_routes_subset is None:
-                    st.error(f"❌ Imposible generar Patrón Maestro para {subset_name}. Hay demasiados puntos y se rompen las 14:30 hs. Intenta extender la hora de llegada.")
+                    st.error(f"❌ Imposible generar Patrón Maestro para {subset_name}. Hay demasiados puntos y se rompen las 14:30 hs. Intenta subir el límite de llegada unos minutos.")
                     st.stop()
                     
                 for r in master_routes_subset:
@@ -929,7 +941,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     vehiculo_real_count += 1
 
             # --- 4. APLICAR EL PATRÓN A CADA DÍA ---
-            st.info("🗓️ Imprimiendo el Patrón Maestro final. Como la IA balanceó los clientes esporádicos, nadie excederá el horario y mantienes la flota mínima de 5 autos.")
+            st.info("🗓️ Imprimiendo el Patrón Maestro en todos los días. Al saltar clientes sin pedido, el horario final bajará naturalmente de las 14:30 hs.")
             for dia in dias_seleccionados:
                 df_dia = df[df['Día'] == dia].copy().reset_index(drop=True)
                 if punto_final_vrp not in df_dia['Lugar'].values:
