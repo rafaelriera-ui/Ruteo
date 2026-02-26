@@ -71,7 +71,7 @@ def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, most
         ).add_to(capa)
         capa.add_to(mapa)
 
-# --- CONEXIÓN PURA BLINDADA CONTRA CAÍDAS DE SERVIDOR ---
+# --- CONEXIÓN PURA BLINDADA ---
 def pedir_matriz_ors_con_reintento(body, headers):
     for intento in range(5): 
         try:
@@ -119,23 +119,19 @@ def obtener_matriz_masiva(lista_coords, headers):
     else:
         matriz_dist = [[0.0] * N for _ in range(N)]
         matriz_dur = [[0.0] * N for _ in range(N)]
-        
         chunk_size = 15 
         for i in range(0, N, chunk_size):
             for j in range(0, N, chunk_size):
                 src_chunk = lista_coords[i : i+chunk_size]
                 dst_chunk = lista_coords[j : j+chunk_size]
-                
                 locs = []
                 src_indices, dst_indices = [], []
-                
                 for pt in src_chunk:
                     if pt not in locs: locs.append(pt)
                     src_indices.append(locs.index(pt))
                 for pt in dst_chunk:
                     if pt not in locs: locs.append(pt)
                     dst_indices.append(locs.index(pt))
-                    
                 body_matrix = {"locations": locs, "sources": src_indices, "destinations": dst_indices, "metrics": ["distance", "duration"]}
                 data, err = pedir_matriz_ors_con_reintento(body_matrix, headers)
                 if data:
@@ -153,19 +149,15 @@ def obtener_trazado_masivo(coords_ordenadas, headers):
     total_dist, total_dur = 0, 0
     all_segments, merged_coordinates = [], []
     chunk_size = 40
-    
     for i in range(0, len(coords_ordenadas) - 1, chunk_size - 1):
         chunk = coords_ordenadas[i:i + chunk_size]
         if len(chunk) < 2: break
-        
         body_dirs = {"coordinates": chunk, "radiuses": [-1] * len(chunk)}
         data, err = pedir_trazado_ors_con_reintento(body_dirs, headers)
-        
         if data:
             props = data['features'][0]['properties']['summary']
             segs = data['features'][0]['properties'].get('segments', [])
             geom = data['features'][0]['geometry']['coordinates']
-            
             total_dist += props['distance']
             total_dur += props['duration']
             all_segments.extend(segs)
@@ -176,7 +168,6 @@ def obtener_trazado_masivo(coords_ordenadas, headers):
         else:
             return None, err
         time.sleep(1.5)
-            
     fake_geojson = {
         "type": "FeatureCollection",
         "features": [{
@@ -281,13 +272,13 @@ elif "Creación de rutas propias" in tipo_ruteo:
     st.sidebar.header("Configuración de Flota Automática")
     
     if "Patrón Fijo" in tipo_ruteo:
-        st.sidebar.info("🗓️ Modo Patrón Maestro: Analiza todos los días para crear un 'Molde Base' inmutable que minimiza la flota de forma global.")
+        st.sidebar.info("🗓️ Modo Patrón Maestro: Toma el DÍA 1 como base perfecta (ej: 5 vehículos) y simplemente acopla los puntos nuevos de los demás días para no romper la eficiencia ni abrir autos de más.")
     elif "Fijo" in tipo_ruteo:
         st.sidebar.info("🏢 Modo Fijo: Corta el mapa y calcula flota 100% independiente por departamento. NUNCA mezcla zonas en un auto.")
     elif "Flexible" in tipo_ruteo:
         st.sidebar.info("🏘️ Modo Flexible: Agrupa por zona para dar orden, pero SÍ PERMITE cruzar fronteras si eso ahorra crear un vehículo entero.")
     else:
-        st.sidebar.info("🚀 Modo Ideal Libre: Ignora fronteras geográficas. Prioriza únicamente el ahorro MÁXIMO de vehículos y kilómetros.")
+        st.sidebar.info("🚀 Modo Ideal Libre: Ignora fronteras geográficas. Prioriza únicamente el ahorro MÁXIMO de vehículos.")
         
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
@@ -310,7 +301,7 @@ elif "Creación de rutas propias" in tipo_ruteo:
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Modo Ahorro Extremo: Optimizando tiempos para usar la MENOR cantidad de autos posible..."):
+    with st.spinner("Modo Ahorro Extremo: Optimizando al máximo para usar la menor cantidad de vehículos..."):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -504,9 +495,9 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         val = matriz_dist[from_node][to_node]
                         dist = int(val) if val is not None else 99999999 
                         
-                        # CASTIGO EXTREMO POR ABRIR VEHÍCULO NUEVO (Garantiza flota mínima)
+                        # 🔴 PENALIDAD EXTREMA: ABRIR UN AUTO NUEVO CUESTA 100 MILLONES (Asegura la flota mínima)
                         if from_node == dummy_idx and to_node != end_idx:
-                            return dist + 10000000 
+                            return dist + 100000000 
                             
                         # Penalidad Departamental Flexible 
                         if "Flexible" in tipo_ruteo:
@@ -659,8 +650,8 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             val = matriz_dist[from_node][to_node]
                             dist = int(val) if val is not None else 99999999 
                             
-                            # CASTIGO EXTREMO POR ABRIR VEHÍCULO NUEVO
-                            if from_node == dummy_idx and to_node != end_idx: return dist + 10000000 
+                            # 🔴 PENALIDAD EXTREMA: ABRIR UN AUTO NUEVO CUESTA 100 MILLONES 
+                            if from_node == dummy_idx and to_node != end_idx: return dist + 100000000 
                             return dist
                             
                         transit_callback_index = routing.RegisterTransitCallback(distance_callback)
@@ -742,12 +733,13 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         st.error(f"Error Matriz {dia} - {dept}: {err_matriz}")
 
         # ==========================================================
-        # LÓGICA 6, 7 Y 8: CREACIÓN DE RUTAS PROPIAS (PATRÓN MAESTRO)
+        # LÓGICA 6, 7 Y 8: CREACIÓN DE RUTAS PROPIAS (PATRÓN MAESTRO - BASADO EN DÍA 1)
         # ==========================================================
         elif "Patrón Fijo" in tipo_ruteo:
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
 
-            st.info("🧠 Generando Patrón Maestro: Maximizando ahorro de flota...")
+            dia_base_global = dias_seleccionados[0]
+            st.info(f"🧠 Generando Patrón Maestro: Estableciendo la flota MÍNIMA ideal usando el {dia_base_global} y acoplando inteligentemente los puntos nuevos del resto de la semana...")
             
             df_master_total = df_filtrado_dias[df_filtrado_dias['Lugar'] != punto_final_vrp].drop_duplicates(subset=['Lugar']).copy().reset_index(drop=True)
 
@@ -760,76 +752,120 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                 departamentos = [d for d in dept_series.unique() if pd.notna(d) and str(d).strip() != '']
 
                 for dept in departamentos:
-                    df_target = df_master_total[df_master_total['Departamento'] == dept].copy().reset_index(drop=True)
-                    if df_target.empty: continue
-                    df_target = pd.concat([df_target, destino_row.to_frame().T], ignore_index=True)
+                    # Buscamos el primer día que tenga datos de este departamento para crear la base
+                    df_dept_original = df_filtrado_dias[(df_filtrado_dias['Departamento'] == dept) & (df_filtrado_dias['Lugar'] != punto_final_vrp)]
+                    if df_dept_original.empty: continue
+                    dia_base_dept = df_dept_original['Día'].unique()[0]
+                    
+                    df_base = df_dept_original[df_dept_original['Día'] == dia_base_dept].drop_duplicates(subset=['Lugar']).copy().reset_index(drop=True)
+                    df_base = pd.concat([df_base, destino_row.to_frame().T], ignore_index=True)
 
-                    lista_coords = df_target['Coords_Procesadas'].tolist()
+                    lista_coords = df_base['Coords_Procesadas'].tolist()
                     num_locs = len(lista_coords)
                     end_idx = num_locs - 1
-                    if num_locs < 2: continue
+                    
+                    rutas_dept_creadas = []
+                    
+                    if num_locs >= 2:
+                        matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
+                        if err_matriz: st.error(err_matriz); st.stop()
 
-                    matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
-                    if err_matriz: st.error(err_matriz); st.stop()
+                        dummy_idx = num_locs
+                        for i in range(num_locs):
+                            matriz_dist[i].append(0); matriz_dur[i].append(0)
+                        matriz_dist.append([0]*(num_locs+1)); matriz_dur.append([0]*(num_locs+1))
 
-                    dummy_idx = num_locs
-                    for i in range(num_locs):
-                        matriz_dist[i].append(0); matriz_dur[i].append(0)
-                    matriz_dist.append([0]*(num_locs+1)); matriz_dur.append([0]*(num_locs+1))
+                        num_vehicles = num_locs
+                        manager = pywrapcp.RoutingIndexManager(num_locs + 1, num_vehicles, [dummy_idx]*num_vehicles, [end_idx]*num_vehicles)
+                        routing = pywrapcp.RoutingModel(manager)
 
-                    num_vehicles = num_locs
-                    manager = pywrapcp.RoutingIndexManager(num_locs + 1, num_vehicles, [dummy_idx]*num_vehicles, [end_idx]*num_vehicles)
-                    routing = pywrapcp.RoutingModel(manager)
+                        def d_call(f, t):
+                            fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
+                            v = matriz_dist[fn][tn]
+                            dist = int(v) if v is not None else 99999999
+                            if fn == dummy_idx and tn != end_idx: return dist + 100000000
+                            return dist
 
-                    def d_call(f, t):
-                        fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
-                        v = matriz_dist[fn][tn]
-                        dist = int(v) if v is not None else 99999999
-                        # CASTIGO EXTREMO PARA FORZAR AHORRO DE FLOTA
-                        if fn == dummy_idx and tn != end_idx: return dist + 10000000
-                        return dist
+                        def t_call(f, t):
+                            fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
+                            vd = matriz_dur[fn][tn]
+                            d_time = int(vd) if vd is not None else 99999999
+                            wt = int(min_parada_vrp*60) if tn != dummy_idx and tn != end_idx else 0
+                            return d_time + wt
 
-                    def t_call(f, t):
-                        fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
-                        vd = matriz_dur[fn][tn]
-                        d_time = int(vd) if vd is not None else 99999999
-                        wt = int(min_parada_vrp*60) if tn != dummy_idx and tn != end_idx else 0
-                        return d_time + wt
+                        transit_cb = routing.RegisterTransitCallback(d_call)
+                        routing.SetArcCostEvaluatorOfAllVehicles(transit_cb)
+                        
+                        time_cb = routing.RegisterTransitCallback(t_call)
+                        routing.AddDimension(time_cb, 0, max_time_sec, True, "Time")
 
-                    transit_cb = routing.RegisterTransitCallback(d_call)
-                    routing.SetArcCostEvaluatorOfAllVehicles(transit_cb)
-                    time_cb = routing.RegisterTransitCallback(t_call)
-                    routing.AddDimension(time_cb, 0, max_time_sec, True, "Time")
+                        search_params = pywrapcp.DefaultRoutingSearchParameters()
+                        search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                        search_params.time_limit.seconds = 10
 
-                    search_params = pywrapcp.DefaultRoutingSearchParameters()
-                    search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
-                    search_params.time_limit.seconds = 10
+                        sol = routing.SolveWithParameters(search_params)
+                        if sol:
+                            for vid in range(num_vehicles):
+                                idx = routing.Start(vid)
+                                fv = sol.Value(routing.NextVar(idx))
+                                if manager.IndexToNode(fv) == end_idx: continue
 
-                    sol = routing.SolveWithParameters(search_params)
-                    if sol:
-                        for vid in range(num_vehicles):
-                            idx = routing.Start(vid)
-                            fv = sol.Value(routing.NextVar(idx))
-                            if manager.IndexToNode(fv) == end_idx: continue
+                                nodos_ord = []
+                                while not routing.IsEnd(idx):
+                                    n = manager.IndexToNode(idx)
+                                    if n != dummy_idx: nodos_ord.append(n)
+                                    idx = sol.Value(routing.NextVar(idx))
+                                nodos_ord.append(end_idx)
 
-                            nodos_ord = []
-                            while not routing.IsEnd(idx):
-                                n = manager.IndexToNode(idx)
-                                if n != dummy_idx: nodos_ord.append(n)
-                                idx = sol.Value(routing.NextVar(idx))
-                            nodos_ord.append(end_idx)
-
-                            lugares = [df_target.iloc[i]['Lugar'] for i in nodos_ord]
+                                lugares = [df_base.iloc[i]['Lugar'] for i in nodos_ord]
+                                r_name = f"Auto {vehiculo_real_count} ({str(dept).strip()})"
+                                rutas_dept_creadas.append({"nombre": r_name, "lugares": lugares, "color_idx": vehiculo_real_count-1})
+                                vehiculo_real_count += 1
+                                
+                    # Insertamos los puntos faltantes de este departamento
+                    df_dept_all = df_master_total[df_master_total['Departamento'] == dept]
+                    lugares_base = set(df_base['Lugar'].tolist())
+                    lugares_dept_todos = df_dept_all['Lugar'].tolist()
+                    lugares_faltantes = [l for l in lugares_dept_todos if l not in lugares_base]
+                    
+                    for lugar_faltante in lugares_faltantes:
+                        coords_faltante = df_dept_all[df_dept_all['Lugar'] == lugar_faltante].iloc[0]['Coords_Procesadas']
+                        mejor_ruta_idx = -1
+                        mejor_pos_idx = -1
+                        min_dist = float('inf')
+                        
+                        for r_idx, ruta in enumerate(rutas_dept_creadas):
+                            for pos_idx, lugar_ruta in enumerate(ruta['lugares']):
+                                if lugar_ruta == punto_final_vrp: continue
+                                match = df_master_total[df_master_total['Lugar'] == lugar_ruta]
+                                if not match.empty:
+                                    coords_ruta = match.iloc[0]['Coords_Procesadas']
+                                    dist = haversine((coords_faltante[1], coords_faltante[0]), (coords_ruta[1], coords_ruta[0]), unit=Unit.METERS)
+                                    if dist < min_dist:
+                                        min_dist = dist
+                                        mejor_ruta_idx = r_idx
+                                        mejor_pos_idx = pos_idx
+                                        
+                        if mejor_ruta_idx != -1:
+                            rutas_dept_creadas[mejor_ruta_idx]['lugares'].insert(mejor_pos_idx + 1, lugar_faltante)
+                        else:
                             r_name = f"Auto {vehiculo_real_count} ({str(dept).strip()})"
-                            rutas_maestras_base.append({"nombre": r_name, "lugares": lugares, "color_idx": vehiculo_real_count-1})
+                            rutas_dept_creadas.append({"nombre": r_name, "lugares": [lugar_faltante, punto_final_vrp], "color_idx": vehiculo_real_count-1})
                             vehiculo_real_count += 1
+                            
+                    rutas_maestras_base.extend(rutas_dept_creadas)
 
             # B) MODO PATRÓN (IDEAL LIBRE O DEPARTAMENTAL FLEXIBLE)
             else:
-                df_target = pd.concat([df_master_total, destino_row.to_frame().T], ignore_index=True)
-                lista_coords = df_target['Coords_Procesadas'].tolist()
+                # Calculamos el Día 1 puro (esto asegura los 5 autos)
+                df_base = df_filtrado_dias[(df_filtrado_dias['Día'] == dia_base_global) & (df_filtrado_dias['Lugar'] != punto_final_vrp)].drop_duplicates(subset=['Lugar']).copy().reset_index(drop=True)
+                df_base = pd.concat([df_base, destino_row.to_frame().T], ignore_index=True)
+                
+                lista_coords = df_base['Coords_Procesadas'].tolist()
                 num_locs = len(lista_coords)
                 end_idx = num_locs - 1
+                
+                rutas_creadas = []
 
                 if num_locs >= 2:
                     matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
@@ -849,14 +885,13 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         v = matriz_dist[fn][tn]
                         dist = int(v) if v is not None else 99999999
                         
-                        # CASTIGO EXTREMO DE FLOTA
-                        if fn == dummy_idx and tn != end_idx: return dist + 10000000
+                        # MULTA EXTREMA: Garantiza la cantidad de flota original
+                        if fn == dummy_idx and tn != end_idx: return dist + 100000000
                             
-                        # CASTIGO DE FRONTERA FLEXIBLE
                         if "Departamental Flexible" in tipo_ruteo:
                             if fn < num_locs and tn < num_locs and fn != end_idx and tn != end_idx and fn != dummy_idx:
-                                dept_f = str(df_target.iloc[fn].get('Departamento', '')).strip().lower()
-                                dept_t = str(df_target.iloc[tn].get('Departamento', '')).strip().lower()
+                                dept_f = str(df_base.iloc[fn].get('Departamento', '')).strip().lower()
+                                dept_t = str(df_base.iloc[tn].get('Departamento', '')).strip().lower()
                                 if dept_f and dept_t and dept_f != dept_t:
                                     dist += 500000
                         return dist
@@ -870,6 +905,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
 
                     transit_cb = routing.RegisterTransitCallback(d_call)
                     routing.SetArcCostEvaluatorOfAllVehicles(transit_cb)
+                    
                     time_cb = routing.RegisterTransitCallback(t_call)
                     routing.AddDimension(time_cb, 0, max_time_sec, True, "Time")
 
@@ -891,13 +927,45 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                 idx = sol.Value(routing.NextVar(idx))
                             nodos_ord.append(end_idx)
 
-                            lugares = [df_target.iloc[i]['Lugar'] for i in nodos_ord]
+                            lugares = [df_base.iloc[i]['Lugar'] for i in nodos_ord]
                             r_name = f"Auto {vehiculo_real_count}"
-                            rutas_maestras_base.append({"nombre": r_name, "lugares": lugares, "color_idx": vehiculo_real_count-1})
+                            rutas_creadas.append({"nombre": r_name, "lugares": lugares, "color_idx": vehiculo_real_count-1})
                             vehiculo_real_count += 1
+                            
+                # Magia final: Insertamos los puntos de los demás días que no existían en el Día 1
+                lugares_base = set(df_base['Lugar'].tolist())
+                lugares_todos = df_master_total['Lugar'].tolist()
+                lugares_faltantes = [l for l in lugares_todos if l not in lugares_base]
+                
+                for lugar_faltante in lugares_faltantes:
+                    coords_faltante = df_master_total[df_master_total['Lugar'] == lugar_faltante].iloc[0]['Coords_Procesadas']
+                    mejor_ruta_idx = -1
+                    mejor_pos_idx = -1
+                    min_dist = float('inf')
+                    
+                    for r_idx, ruta in enumerate(rutas_creadas):
+                        for pos_idx, lugar_ruta in enumerate(ruta['lugares']):
+                            if lugar_ruta == punto_final_vrp: continue
+                            match = df_master_total[df_master_total['Lugar'] == lugar_ruta]
+                            if not match.empty:
+                                coords_ruta = match.iloc[0]['Coords_Procesadas']
+                                dist = haversine((coords_faltante[1], coords_faltante[0]), (coords_ruta[1], coords_ruta[0]), unit=Unit.METERS)
+                                if dist < min_dist:
+                                    min_dist = dist
+                                    mejor_ruta_idx = r_idx
+                                    mejor_pos_idx = pos_idx
+                                    
+                    if mejor_ruta_idx != -1:
+                        rutas_creadas[mejor_ruta_idx]['lugares'].insert(mejor_pos_idx + 1, lugar_faltante)
+                    else:
+                        r_name = f"Auto {vehiculo_real_count}"
+                        rutas_creadas.append({"nombre": r_name, "lugares": [lugar_faltante, punto_final_vrp], "color_idx": vehiculo_real_count-1})
+                        vehiculo_real_count += 1
+                        
+                rutas_maestras_base = rutas_creadas
 
             # --- 3. APLICAR EL PATRÓN A CADA DÍA ---
-            st.info("🗓️ Imprimiendo el Patrón Maestro en los días seleccionados (saltando clientes sin pedido)...")
+            st.info("🗓️ Imprimiendo el Patrón Maestro en los días seleccionados (manteniendo las rutas idénticas)...")
             for dia in dias_seleccionados:
                 df_dia = df[df['Día'] == dia].copy().reset_index(drop=True)
                 if punto_final_vrp not in df_dia['Lugar'].values:
