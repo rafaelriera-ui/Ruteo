@@ -119,19 +119,23 @@ def obtener_matriz_masiva(lista_coords, headers):
     else:
         matriz_dist = [[0.0] * N for _ in range(N)]
         matriz_dur = [[0.0] * N for _ in range(N)]
+        
         chunk_size = 15 
         for i in range(0, N, chunk_size):
             for j in range(0, N, chunk_size):
                 src_chunk = lista_coords[i : i+chunk_size]
                 dst_chunk = lista_coords[j : j+chunk_size]
+                
                 locs = []
                 src_indices, dst_indices = [], []
+                
                 for pt in src_chunk:
                     if pt not in locs: locs.append(pt)
                     src_indices.append(locs.index(pt))
                 for pt in dst_chunk:
                     if pt not in locs: locs.append(pt)
                     dst_indices.append(locs.index(pt))
+                    
                 body_matrix = {"locations": locs, "sources": src_indices, "destinations": dst_indices, "metrics": ["distance", "duration"]}
                 data, err = pedir_matriz_ors_con_reintento(body_matrix, headers)
                 if data:
@@ -149,15 +153,19 @@ def obtener_trazado_masivo(coords_ordenadas, headers):
     total_dist, total_dur = 0, 0
     all_segments, merged_coordinates = [], []
     chunk_size = 40
+    
     for i in range(0, len(coords_ordenadas) - 1, chunk_size - 1):
         chunk = coords_ordenadas[i:i + chunk_size]
         if len(chunk) < 2: break
+        
         body_dirs = {"coordinates": chunk, "radiuses": [-1] * len(chunk)}
         data, err = pedir_trazado_ors_con_reintento(body_dirs, headers)
+        
         if data:
             props = data['features'][0]['properties']['summary']
             segs = data['features'][0]['properties'].get('segments', [])
             geom = data['features'][0]['geometry']['coordinates']
+            
             total_dist += props['distance']
             total_dur += props['duration']
             all_segments.extend(segs)
@@ -168,6 +176,7 @@ def obtener_trazado_masivo(coords_ordenadas, headers):
         else:
             return None, err
         time.sleep(1.5)
+            
     fake_geojson = {
         "type": "FeatureCollection",
         "features": [{
@@ -272,13 +281,13 @@ elif "Creación de rutas propias" in tipo_ruteo:
     st.sidebar.header("Configuración de Flota Automática")
     
     if "Patrón Fijo" in tipo_ruteo:
-        st.sidebar.info("🗓️ Modo Patrón Maestro: Analiza todos los días para crear un 'Molde Base' equilibrado que aplicará siempre igual.")
+        st.sidebar.info("🗓️ Modo Patrón Maestro: Analiza todos los días para crear un 'Molde Base' inmutable que minimiza la flota de forma global.")
     elif "Fijo" in tipo_ruteo:
         st.sidebar.info("🏢 Modo Fijo: Corta el mapa y calcula flota 100% independiente por departamento. NUNCA mezcla zonas en un auto.")
     elif "Flexible" in tipo_ruteo:
         st.sidebar.info("🏘️ Modo Flexible: Agrupa por zona para dar orden, pero SÍ PERMITE cruzar fronteras si eso ahorra crear un vehículo entero.")
     else:
-        st.sidebar.info("🚀 Modo Ideal Libre: Ignora fronteras geográficas. Prioriza únicamente tiempo, kilómetros y ahorro máximo de vehículos.")
+        st.sidebar.info("🚀 Modo Ideal Libre: Ignora fronteras geográficas. Prioriza únicamente el ahorro MÁXIMO de vehículos y kilómetros.")
         
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
@@ -301,7 +310,7 @@ elif "Creación de rutas propias" in tipo_ruteo:
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Nivelando cargas y minimizando la flota vehicular requerida..."):
+    with st.spinner("Modo Ahorro Extremo: Optimizando tiempos para usar la MENOR cantidad de autos posible..."):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -495,20 +504,21 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         val = matriz_dist[from_node][to_node]
                         dist = int(val) if val is not None else 99999999 
                         
+                        # CASTIGO EXTREMO POR ABRIR VEHÍCULO NUEVO (Garantiza flota mínima)
+                        if from_node == dummy_idx and to_node != end_idx:
+                            return dist + 10000000 
+                            
                         # Penalidad Departamental Flexible 
                         if "Flexible" in tipo_ruteo:
                             if from_node < num_locs and to_node < num_locs and from_node != end_idx and to_node != end_idx and from_node != dummy_idx:
                                 dept_f = str(df_dia.iloc[from_node].get('Departamento', '')).strip().lower()
                                 dept_t = str(df_dia.iloc[to_node].get('Departamento', '')).strip().lower()
                                 if dept_f and dept_t and dept_f != dept_t:
-                                    dist += 50000 
+                                    dist += 500000 
                         return dist
                         
                     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-                    
-                    # 🔴 BLOQUEO TOTAL DE AUTOS FANTASMAS: Obliga a usar la cantidad mínima de flota
-                    routing.SetFixedCostOfAllVehicles(5000000)
                     
                     def time_callback(from_index, to_index):
                         from_node = manager.IndexToNode(from_index)
@@ -520,10 +530,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         
                     time_callback_index = routing.RegisterTransitCallback(time_callback)
                     routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
-                    
-                    # 🟢 EQUILIBRADOR SUAVE: Nivelará el tiempo solo entre los pocos autos que se abran
-                    time_dimension = routing.GetDimensionOrDie("Time")
-                    time_dimension.SetGlobalSpanCostCoefficient(100)
 
                     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
                     search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
@@ -537,7 +543,10 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         for vehicle_id in range(num_vehicles):
                             index = routing.Start(vehicle_id)
                             first_visit = solution.Value(routing.NextVar(index))
-                            if manager.IndexToNode(first_visit) == end_idx: continue 
+                            
+                            if manager.IndexToNode(first_visit) == end_idx:
+                                continue 
+                            
                             nodos_ordenados = []
                             while not routing.IsEnd(index):
                                 node = manager.IndexToNode(index)
@@ -649,13 +658,13 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             to_node = manager.IndexToNode(to_index)
                             val = matriz_dist[from_node][to_node]
                             dist = int(val) if val is not None else 99999999 
+                            
+                            # CASTIGO EXTREMO POR ABRIR VEHÍCULO NUEVO
+                            if from_node == dummy_idx and to_node != end_idx: return dist + 10000000 
                             return dist
                             
                         transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                         routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-                        
-                        # BLOQUEO DE FLOTA Y EQUILIBRADOR
-                        routing.SetFixedCostOfAllVehicles(5000000)
                         
                         def time_callback(from_index, to_index):
                             from_node = manager.IndexToNode(from_index)
@@ -667,9 +676,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             
                         time_callback_index = routing.RegisterTransitCallback(time_callback)
                         routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
-                        
-                        time_dimension = routing.GetDimensionOrDie("Time")
-                        time_dimension.SetGlobalSpanCostCoefficient(100)
 
                         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
                         search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
@@ -741,7 +747,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
         elif "Patrón Fijo" in tipo_ruteo:
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
 
-            st.info("🧠 Generando Patrón Maestro Equilibrado y minimizando flota...")
+            st.info("🧠 Generando Patrón Maestro: Maximizando ahorro de flota...")
             
             df_master_total = df_filtrado_dias[df_filtrado_dias['Lugar'] != punto_final_vrp].drop_duplicates(subset=['Lugar']).copy().reset_index(drop=True)
 
@@ -779,6 +785,8 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
                         v = matriz_dist[fn][tn]
                         dist = int(v) if v is not None else 99999999
+                        # CASTIGO EXTREMO PARA FORZAR AHORRO DE FLOTA
+                        if fn == dummy_idx and tn != end_idx: return dist + 10000000
                         return dist
 
                     def t_call(f, t):
@@ -790,13 +798,8 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
 
                     transit_cb = routing.RegisterTransitCallback(d_call)
                     routing.SetArcCostEvaluatorOfAllVehicles(transit_cb)
-                    
-                    # BLOQUEO Y EQUILIBRIO
-                    routing.SetFixedCostOfAllVehicles(5000000)
                     time_cb = routing.RegisterTransitCallback(t_call)
                     routing.AddDimension(time_cb, 0, max_time_sec, True, "Time")
-                    time_dim = routing.GetDimensionOrDie("Time")
-                    time_dim.SetGlobalSpanCostCoefficient(100)
 
                     search_params = pywrapcp.DefaultRoutingSearchParameters()
                     search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
@@ -846,12 +849,16 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         v = matriz_dist[fn][tn]
                         dist = int(v) if v is not None else 99999999
                         
+                        # CASTIGO EXTREMO DE FLOTA
+                        if fn == dummy_idx and tn != end_idx: return dist + 10000000
+                            
+                        # CASTIGO DE FRONTERA FLEXIBLE
                         if "Departamental Flexible" in tipo_ruteo:
                             if fn < num_locs and tn < num_locs and fn != end_idx and tn != end_idx and fn != dummy_idx:
                                 dept_f = str(df_target.iloc[fn].get('Departamento', '')).strip().lower()
                                 dept_t = str(df_target.iloc[tn].get('Departamento', '')).strip().lower()
                                 if dept_f and dept_t and dept_f != dept_t:
-                                    dist += 50000
+                                    dist += 500000
                         return dist
 
                     def t_call(f, t):
@@ -863,13 +870,8 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
 
                     transit_cb = routing.RegisterTransitCallback(d_call)
                     routing.SetArcCostEvaluatorOfAllVehicles(transit_cb)
-                    
-                    # BLOQUEO Y EQUILIBRIO GLOBAL
-                    routing.SetFixedCostOfAllVehicles(5000000)
                     time_cb = routing.RegisterTransitCallback(t_call)
                     routing.AddDimension(time_cb, 0, max_time_sec, True, "Time")
-                    time_dim = routing.GetDimensionOrDie("Time")
-                    time_dim.SetGlobalSpanCostCoefficient(100)
 
                     search_params = pywrapcp.DefaultRoutingSearchParameters()
                     search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
