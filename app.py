@@ -226,7 +226,7 @@ df_filtrado_dias = df[df['Día'].isin(dias_seleccionados)]
 st.sidebar.markdown("---")
 st.sidebar.header("2. Estrategia de Ruteo")
 
-# LAS 7 OPCIONES DEFINITIVAS
+# LAS 8 OPCIONES DEFINITIVAS
 tipo_ruteo = st.sidebar.radio(
     "Selecciona cómo armar las rutas:",
     [
@@ -236,6 +236,7 @@ tipo_ruteo = st.sidebar.radio(
         "Creación de rutas propias (Departamental Flexible)",
         "Creación de rutas propias (Departamental Fijo)",
         "Creación de rutas propias (Ideal Libre - Patrón Fijo)",
+        "Creación de rutas propias (Departamental Flexible - Patrón Fijo)",
         "Creación de rutas propias (Departamental Fijo - Patrón Fijo)"
     ]
 )
@@ -281,7 +282,7 @@ elif "Creación de rutas propias" in tipo_ruteo:
     st.sidebar.header("Configuración de Flota Automática")
     
     if "Patrón Fijo" in tipo_ruteo:
-        st.sidebar.info("🗓️ Modo Patrón Maestro: Analiza todos los días seleccionados para crear un 'Molde Base'. Las rutas de cada día mantendrán siempre la misma forma y orden, simplemente saltando los clientes que no tengan entregas ese día.")
+        st.sidebar.info("🗓️ Modo Patrón Maestro: Analiza todos los días seleccionados para crear un 'Molde Base' que aplicará siempre igual.")
     elif "Fijo" in tipo_ruteo:
         st.sidebar.info("🏢 Modo Fijo: Corta el mapa y calcula flota 100% independiente por departamento. NUNCA mezcla zonas en un auto.")
     elif "Flexible" in tipo_ruteo:
@@ -455,7 +456,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             st.error(f"Error trazando calles de {ruta}: {err_dirs}")
 
         # ==========================================================
-        # LÓGICA 3 Y 4: CREACIÓN DE RUTAS PROPIAS (LIBRE Y FLEXIBLE - DIARIO)
+        # LÓGICA 3 Y 4: CREACIÓN DE RUTAS PROPIAS (NORMAL DIA A DIA)
         # ==========================================================
         elif tipo_ruteo in ["Creación de rutas propias (Ideal Libre)", "Creación de rutas propias (Departamental Flexible)"]:
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
@@ -507,13 +508,15 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         val = matriz_dist[from_node][to_node]
                         dist = int(val) if val is not None else 99999999 
                         
-                        if from_node == dummy_idx and to_node != end_idx: return dist + 10000000 
+                        if from_node == dummy_idx and to_node != end_idx:
+                            return dist + 10000000 
                             
                         if "Flexible" in tipo_ruteo:
                             if from_node < num_locs and to_node < num_locs and from_node != end_idx and to_node != end_idx and from_node != dummy_idx:
                                 dept_f = str(df_dia.iloc[from_node].get('Departamento', '')).strip().lower()
                                 dept_t = str(df_dia.iloc[to_node].get('Departamento', '')).strip().lower()
-                                if dept_f and dept_t and dept_f != dept_t: dist += 500000 
+                                if dept_f and dept_t and dept_f != dept_t:
+                                    dist += 500000 
                                     
                         return dist
                         
@@ -546,11 +549,15 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         for vehicle_id in range(num_vehicles):
                             index = routing.Start(vehicle_id)
                             first_visit = solution.Value(routing.NextVar(index))
-                            if manager.IndexToNode(first_visit) == end_idx: continue 
+                            
+                            if manager.IndexToNode(first_visit) == end_idx:
+                                continue 
+                            
                             nodos_ordenados = []
                             while not routing.IsEnd(index):
                                 node = manager.IndexToNode(index)
-                                if node != dummy_idx: nodos_ordenados.append(node)
+                                if node != dummy_idx:
+                                    nodos_ordenados.append(node)
                                 index = solution.Value(routing.NextVar(index))
                             nodos_ordenados.append(end_idx)
                             
@@ -600,7 +607,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     st.error(f"Error Matriz {dia}: {err_matriz}")
 
         # ==========================================================
-        # LÓGICA 5: CREACIÓN DE RUTAS PROPIAS (DEPARTAMENTAL FIJO - DIARIO)
+        # LÓGICA 5: CREACIÓN DE RUTAS PROPIAS (DEPARTAMENTAL FIJO - NORMAL)
         # ==========================================================
         elif tipo_ruteo == "Creación de rutas propias (Departamental Fijo)":
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
@@ -743,21 +750,20 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         st.error(f"Error Matriz {dia} - {dept}: {err_matriz}")
 
         # ==========================================================
-        # LÓGICA 6 Y 7: CREACIÓN DE RUTAS PROPIAS (PATRÓN FIJO / MASTER PLAN)
+        # LÓGICA 6, 7 Y 8: CREACIÓN DE RUTAS PROPIAS (PATRÓN MAESTRO)
         # ==========================================================
         elif "Patrón Fijo" in tipo_ruteo:
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
 
             st.info("🧠 Generando Patrón Maestro: Analizando todos los puntos del Excel para crear moldes inmutables de rutas...")
             
-            # Unimos todos los puntos de todos los días seleccionados en un único "Mapa Maestro" sin repetidos
             df_master_total = df_filtrado_dias[df_filtrado_dias['Lugar'] != punto_final_vrp].drop_duplicates(subset=['Lugar']).copy().reset_index(drop=True)
 
             rutas_maestras_base = []
             vehiculo_real_count = 1
 
-            # A) MODO PATRÓN FIJO DEPARTAMENTAL
-            if "Departamental" in tipo_ruteo:
+            # A) MODO PATRÓN FIJO DEPARTAMENTAL FIJO (CORTA EL MAPA)
+            if "Departamental Fijo" in tipo_ruteo:
                 dept_series = df_master_total['Departamento']
                 departamentos = [d for d in dept_series.unique() if pd.notna(d) and str(d).strip() != '']
 
@@ -828,7 +834,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             rutas_maestras_base.append({"nombre": r_name, "lugares": lugares, "color_idx": vehiculo_real_count-1})
                             vehiculo_real_count += 1
 
-            # B) MODO PATRÓN FIJO IDEAL LIBRE
+            # B) MODO PATRÓN (IDEAL LIBRE O DEPARTAMENTAL FLEXIBLE)
             else:
                 df_target = pd.concat([df_master_total, destino_row.to_frame().T], ignore_index=True)
                 lista_coords = df_target['Coords_Procesadas'].tolist()
@@ -852,7 +858,16 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
                         v = matriz_dist[fn][tn]
                         dist = int(v) if v is not None else 99999999
-                        if fn == dummy_idx and tn != end_idx: return dist + 10000000
+                        if fn == dummy_idx and tn != end_idx: 
+                            return dist + 10000000
+                            
+                        # Si es el Modo Flexible, aplicamos el peaje de frontera sobre la matriz global
+                        if "Departamental Flexible" in tipo_ruteo:
+                            if fn < num_locs and tn < num_locs and fn != end_idx and tn != end_idx and fn != dummy_idx:
+                                dept_f = str(df_target.iloc[fn].get('Departamento', '')).strip().lower()
+                                dept_t = str(df_target.iloc[tn].get('Departamento', '')).strip().lower()
+                                if dept_f and dept_t and dept_f != dept_t:
+                                    dist += 500000
                         return dist
 
                     def t_call(f, t):
@@ -907,10 +922,9 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     dibujar_geozona_circular(lista_coords_dia, f"🌍 DÍA: {dia}", "black", mapa_calculado)
 
                 for ruta_maestra in rutas_maestras_base:
-                    # Filtramos la ruta maestra para dejar SOLO los clientes que existen en este dia específico
                     lugares_hoy = [l for l in ruta_maestra['lugares'] if l in lugares_del_dia]
 
-                    if len(lugares_hoy) < 2: continue # Si hoy el auto está vacío o solo va al punto final, lo cancelamos
+                    if len(lugares_hoy) < 2: continue 
 
                     if lugares_hoy[-1] != punto_final_vrp:
                         if punto_final_vrp in lugares_hoy:
@@ -920,7 +934,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     filas_hoy = []
                     coords_ordenadas = []
                     for l in lugares_hoy:
-                        # Extraemos la fila exacta de ese día para obtener coordenadas
                         fila = df_dia[df_dia['Lugar'] == l].iloc[0]
                         filas_hoy.append(fila)
                         coords_ordenadas.append(fila['Coords_Procesadas'])
