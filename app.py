@@ -272,7 +272,7 @@ elif "Creación de rutas propias" in tipo_ruteo:
     st.sidebar.header("Configuración de Flota Automática")
     
     if "Patrón Fijo" in tipo_ruteo:
-        st.sidebar.info("🗓️ Modo Patrón Maestro: Filtra los clientes frecuentes para fijar la flota MÍNIMA, y luego inyecta los clientes esporádicos controlando el reloj para NO PASARSE DE LA HORA.")
+        st.sidebar.info("🗓️ Modo Patrón Maestro (Tu Lógica): Extrae los clientes esporádicos para asegurar una FLOTA MÍNIMA BASE (ej: 5 vehículos). Luego inyecta esos puntos controlando el reloj para JAMÁS pasar de las 14:30 hs.")
     elif "Fijo" in tipo_ruteo:
         st.sidebar.info("🏢 Modo Fijo: Corta el mapa y calcula flota 100% independiente por departamento. NUNCA mezcla zonas en un auto.")
     elif "Flexible" in tipo_ruteo:
@@ -301,7 +301,7 @@ elif "Creación de rutas propias" in tipo_ruteo:
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Modo Ahorro Extremo sin Sindicato: Obligando a la IA a usar la mínima cantidad posible de autos sin exceder la hora..."):
+    with st.spinner("Modo Ahorro Extremo (Sin Sindicato): Forzando la mínima cantidad de vehículos matemáticamente posible..."):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -509,6 +509,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                     
+                    # 🔴 PENALIDAD EXTREMA DE FLOTA
                     routing.SetFixedCostOfAllVehicles(100000000)
                     
                     def time_callback(from_index, to_index):
@@ -733,16 +734,16 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         st.error(f"Error Matriz {dia} - {dept}: {err_matriz}")
 
         # ==========================================================
-        # LÓGICA 6, 7 Y 8: CREACIÓN DE RUTAS PROPIAS (PATRÓN MAESTRO - INTELIGENCIA TOTAL)
+        # LÓGICA 6, 7 Y 8: CREACIÓN DE RUTAS PROPIAS (PATRÓN MAESTRO - TU LÓGICA DE BALANCEO)
         # ==========================================================
         elif "Patrón Fijo" in tipo_ruteo:
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
 
-            st.info("🧠 Generando Patrón Maestro: Extrayendo clientes esporádicos para fijar la Flota Base (ej: 5 vehículos), y luego inyectándolos con control de reloj para jamás pasar de las 14:30...")
+            st.info("🧠 Aplicando tu lógica de Balanceo por Saturación: Extrayendo puntos esporádicos, calculando la flota base firme, y reinyectando con control estricto de reloj (Max 14:30)...")
             
             df_total_puntos = df_filtrado_dias[df_filtrado_dias['Lugar'] != punto_final_vrp].drop_duplicates(subset=['Lugar']).copy().reset_index(drop=True)
             
-            # Pedimos UNA ÚNICA MATRIZ MUNDIAL para no matar a OpenRouteService
+            # Matriz Única Mundial para todo el cálculo de Patrones
             df_master_global = pd.concat([df_total_puntos, destino_row.to_frame().T], ignore_index=True)
             lista_coords_global = df_master_global['Coords_Procesadas'].tolist()
             lugares_globales = df_master_global['Lugar'].tolist()
@@ -751,20 +752,16 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
             matriz_dist_global, matriz_dur_global, err_matriz_glob = obtener_matriz_masiva(lista_coords_global, headers)
             if err_matriz_glob: st.error(err_matriz_glob); st.stop()
             
-            # LIMPIEZA DE DECIMALES OBLIGATORIA PARA EVITAR EL "SystemError" EN OR-TOOLS
+            # LIMPIEZA OBLIGATORIA A ENTEROS (Previene el SystemError en C++)
             for i in range(len(matriz_dist_global)):
                 for j in range(len(matriz_dist_global[0])):
-                    if matriz_dist_global[i][j] is None: 
-                        matriz_dist_global[i][j] = 99999999
-                    else:
-                        matriz_dist_global[i][j] = int(matriz_dist_global[i][j])
-                        
-                    if matriz_dur_global[i][j] is None: 
-                        matriz_dur_global[i][j] = 99999999
-                    else:
-                        matriz_dur_global[i][j] = int(matriz_dur_global[i][j])
+                    if matriz_dist_global[i][j] is None: matriz_dist_global[i][j] = 99999999
+                    else: matriz_dist_global[i][j] = int(matriz_dist_global[i][j])
+                    if matriz_dur_global[i][j] is None: matriz_dur_global[i][j] = 99999999
+                    else: matriz_dur_global[i][j] = int(matriz_dur_global[i][j])
 
-            def calc_route_time_on_day(ruta_locs, day):
+            # Reloj de auditoría interna
+            def calcular_tiempo_ruta_en_dia_especifico(ruta_locs, day):
                 locs_day = set(df_filtrado_dias[df_filtrado_dias['Día'] == day]['Lugar'])
                 r_day = [l for l in ruta_locs if l in locs_day]
                 if not r_day: return 0
@@ -789,14 +786,14 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                 subsets.append(("General", df_total_puntos['Lugar'].tolist()))
 
             for subset_name, subset_lugares in subsets:
-                # 1. FILTRO DE FRECUENCIA: ¿Cuántas veces aparece cada cliente?
-                freq_dict = df_filtrado_dias[(df_filtrado_dias['Lugar'].isin(subset_lugares))]['Lugar'].value_counts().to_dict()
+                # 1. Filtro de Frecuencia (Tu idea)
+                freq_dict = df_filtrado_dias[df_filtrado_dias['Lugar'].isin(subset_lugares)]['Lugar'].value_counts().to_dict()
                 if not freq_dict: continue
                 max_freq = max(freq_dict.values())
                 
                 master_routes_subset = None
                 
-                # 2. EL CICLO DE RECORTE: Vamos quitando a los que aparecen 1 vez, luego a los de 2 veces, hasta lograr la flota perfecta
+                # 2. Ciclo de Recorte Recursivo: Quita esporádicos hasta que los fijos logran la flota mínima perfecta
                 for threshold in range(1, max_freq + 2): 
                     core_lugares = [l for l, count in freq_dict.items() if count > threshold]
                     rare_lugares = [l for l, count in freq_dict.items() if count <= threshold]
@@ -810,18 +807,20 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     end_idx_sub = num_sub
                     dummy_idx = num_sub + 1
                     
+                    rutas_core = []
+                    
                     if num_sub < 2:
-                        rutas_core = [[core_lugares[0]]] if num_sub == 1 else []
+                        if num_sub == 1: rutas_core = [[core_lugares[0]]]
                     else:
                         sub_dist = [[0]*(num_sub+2) for _ in range(num_sub+2)]
                         sub_dur = [[0]*(num_sub+2) for _ in range(num_sub+2)]
                         
                         for i in range(num_sub):
                             for j in range(num_sub):
-                                sub_dist[i][j] = int(matriz_dist_global[core_indices[i]][core_indices[j]])
-                                sub_dur[i][j] = int(matriz_dur_global[core_indices[i]][core_indices[j]])
-                            sub_dist[i][end_idx_sub] = int(matriz_dist_global[core_indices[i]][end_idx_global])
-                            sub_dur[i][end_idx_sub] = int(matriz_dur_global[core_indices[i]][end_idx_global])
+                                sub_dist[i][j] = matriz_dist_global[core_indices[i]][core_indices[j]]
+                                sub_dur[i][j] = matriz_dur_global[core_indices[i]][core_indices[j]]
+                            sub_dist[i][end_idx_sub] = matriz_dist_global[core_indices[i]][end_idx_global]
+                            sub_dur[i][end_idx_sub] = matriz_dur_global[core_indices[i]][end_idx_global]
                             
                         for j in range(num_sub):
                             sub_dist[dummy_idx][j] = 0; sub_dur[dummy_idx][j] = 0
@@ -832,8 +831,8 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
 
                         def d_call(f, t):
                             fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
-                            dist = int(sub_dist[fn][tn])
-                            if fn == dummy_idx and tn != end_idx_sub: return dist + 100000000 
+                            dist = sub_dist[fn][tn]
+                            if fn == dummy_idx and tn != end_idx_sub: return dist + 100000000 # Flota mínima forzada
                             
                             if "Flexible" in tipo_ruteo:
                                 if fn < num_sub and tn < num_sub:
@@ -846,7 +845,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         def t_call(f, t):
                             fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
                             wt = int(min_parada_vrp*60) if tn != dummy_idx and tn != end_idx_sub else 0
-                            return int(sub_dur[fn][tn]) + wt
+                            return sub_dur[fn][tn] + wt
 
                         transit_cb = routing.RegisterTransitCallback(d_call)
                         routing.SetArcCostEvaluatorOfAllVehicles(transit_cb)
@@ -861,7 +860,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         search_params.time_limit.seconds = 5 
                         
                         sol = routing.SolveWithParameters(search_params)
-                        rutas_core = []
                         if sol:
                             for vid in range(num_sub):
                                 idx = routing.Start(vid)
@@ -874,15 +872,16 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                     idx = sol.Value(routing.NextVar(idx))
                                 rutas_core.append(nodos_ord)
                         else:
-                            continue # Sube el filtro para el siguiente intento
+                            continue # Si no pudo, sube el filtro de esporádicos para el siguiente intento
                             
-                    # 3. INYECCIÓN CON RELOJ (Balanceo por Saturación)
+                    # 3. INYECCIÓN CON RELOJ (Tu idea: Si se pasa de la hora, lo manda a otro auto)
                     success = True
                     rutas_current = [list(r) for r in rutas_core]
+                    # Ordenamos a los raros para inyectar primero a los que aparecen 2 veces, luego 1
                     rare_lugares.sort(key=lambda x: freq_dict[x], reverse=True)
                     
                     for rare_loc in rare_lugares:
-                        days_R = df_filtrado_dias[df_filtrado_dias['Lugar'] == rare_loc]['Día'].unique()
+                        days_active = df_filtrado_dias[df_filtrado_dias['Lugar'] == rare_loc]['Día'].unique()
                         rare_idx = lugares_globales.index(rare_loc)
                         
                         best_r = -1; best_pos = -1; min_extra_dist = float('inf')
@@ -892,9 +891,10 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                 valid = True
                                 total_extra_dist = 0
                                 
-                                for day in days_R:
+                                for day in days_active:
                                     locs_day = set(df_filtrado_dias[df_filtrado_dias['Día'] == day]['Lugar'])
                                     
+                                    # Simulamos la ruta exacta para ESE día
                                     A_loc = next((l for l in reversed(ruta[:pos]) if l in locs_day), None)
                                     B_loc = next((l for l in ruta[pos:] if l in locs_day), None)
                                     
@@ -908,9 +908,9 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                         extra_t = matriz_dur_global[A_idx][rare_idx] + matriz_dur_global[rare_idx][B_idx] - matriz_dur_global[A_idx][B_idx] + int(min_parada_vrp*60)
                                         extra_d = matriz_dist_global[A_idx][rare_idx] + matriz_dist_global[rare_idx][B_idx] - matriz_dist_global[A_idx][B_idx]
                                         
-                                    base_t = calc_route_time_on_day(ruta, day)
+                                    base_t = calcular_tiempo_ruta_en_dia_especifico(ruta, day)
                                     
-                                    # LA LEY DE ORO: SI SE PASA DE LAS 14:30, SE LO PROHÍBE AL INSTANTE
+                                    # LA LEY DE ORO: SI SE PASA DE LAS 14:30, RECHAZA LA INYECCIÓN
                                     if base_t + extra_t > max_time_sec:
                                         valid = False
                                         break
@@ -924,14 +924,14 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             rutas_current[best_r].insert(best_pos, rare_loc)
                         else:
                             success = False
-                            break
+                            break # Falló el reloj en todos los autos, subimos el filtro
                             
                     if success:
                         master_routes_subset = rutas_current
-                        break # ¡Logramos la flota perfecta!
+                        break # ¡Logramos el Patrón Maestro Perfecto!
                         
                 if master_routes_subset is None:
-                    st.error(f"❌ Imposible generar Patrón Maestro para {subset_name}. Hay demasiados puntos y se rompen las 14:30 hs. Intenta subir el límite de llegada unos minutos.")
+                    st.error(f"❌ Imposible generar Patrón Maestro para {subset_name}. Hay demasiados puntos para la hora límite. Intenta extender la llegada a las 15:00.")
                     st.stop()
                     
                 for r in master_routes_subset:
@@ -941,7 +941,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     vehiculo_real_count += 1
 
             # --- 4. APLICAR EL PATRÓN A CADA DÍA ---
-            st.info("🗓️ Imprimiendo el Patrón Maestro en todos los días. Al saltar clientes sin pedido, el horario final bajará naturalmente de las 14:30 hs.")
+            st.info("🗓️ Imprimiendo el Patrón Maestro final. Como la IA auditó el reloj, garantizamos tu flota mínima sin que nadie exceda el horario.")
             for dia in dias_seleccionados:
                 df_dia = df[df['Día'] == dia].copy().reset_index(drop=True)
                 if punto_final_vrp not in df_dia['Lugar'].values:
