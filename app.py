@@ -71,9 +71,9 @@ def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, most
         ).add_to(capa)
         capa.add_to(mapa)
 
-# --- CONEXIÓN PURA BLINDADA CONTRA CAÍDAS DE SERVIDOR (504, 502, Unknown Profile) ---
+# --- CONEXIÓN PURA BLINDADA CONTRA CAÍDAS DE SERVIDOR ---
 def pedir_matriz_ors_con_reintento(body, headers):
-    for intento in range(5): # Hasta 5 intentos si el servidor tose
+    for intento in range(5): 
         try:
             resp = requests.post('https://api.openrouteservice.org/v2/matrix/driving-car', json=body, headers=headers, timeout=45)
             if resp.status_code == 200:
@@ -81,16 +81,13 @@ def pedir_matriz_ors_con_reintento(body, headers):
             elif "Quota" in resp.text or resp.status_code == 403:
                 return None, "QUOTA_EXCEEDED"
             elif resp.status_code == 429 or "Rate limit" in resp.text:
-                time.sleep(60) # Bloqueo por velocidad, esperamos 1 minuto
+                time.sleep(60) 
             elif resp.status_code >= 500 or "unknown" in resp.text.lower():
-                # Servidor caído (504) o bug temporal de ORS. Esperamos 5 segs y reintentamos.
                 time.sleep(5)
             else:
                 return None, resp.text
         except requests.exceptions.RequestException:
-            # Si el servidor directamente no responde (Timeout)
             time.sleep(5)
-            
     return None, "Superado el límite de reintentos. El servidor de mapas mundial está caído temporalmente."
 
 def pedir_trazado_ors_con_reintento(body, headers):
@@ -109,8 +106,7 @@ def pedir_trazado_ors_con_reintento(body, headers):
                 return None, resp.text
         except requests.exceptions.RequestException:
             time.sleep(5)
-            
-    return None, "Superado el límite de reintentos. El servidor de mapas mundial está caído temporalmente."
+    return None, "Superado el límite de reintentos."
 
 def obtener_matriz_masiva(lista_coords, headers):
     N = len(lista_coords)
@@ -234,8 +230,8 @@ tipo_ruteo = st.sidebar.radio(
     ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)", "Creación de rutas propias"]
 )
 
-punto_final_fijo = False
-indices_puntos_finales = {}
+opciones_inicio_dict = {}
+opciones_fin_dict = {}
 rutas_seleccionadas = []
 
 if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"]:
@@ -252,23 +248,31 @@ if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"
         st.stop()
         
     if tipo_ruteo == "Ruteo Optimizado (IA)":
-        activar_punto_final = st.sidebar.checkbox("🏁 Definir Punto Final específico")
-        if activar_punto_final:
-            punto_final_fijo = True
-            st.sidebar.markdown("**Selecciona el destino final para cada ruta:**")
-            for dia in dias_seleccionados:
-                for ruta in rutas_seleccionadas:
-                    df_unicaruta = df_filtrado_dias[(df_filtrado_dias['Día'] == dia) & (df_filtrado_dias['Ruta'] == ruta)].reset_index(drop=True)
-                    if not df_unicaruta.empty:
-                        opciones_lugar = df_unicaruta['Lugar'].tolist()
-                        id_ruta = f"{dia} - {ruta}"
-                        lugar_final = st.sidebar.selectbox(f"Destino para {id_ruta}:", opciones_lugar, index=len(opciones_lugar)-1, key=f"end_{id_ruta}")
-                        indices_puntos_finales[id_ruta] = df_unicaruta[df_unicaruta['Lugar'] == lugar_final].index[0]
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("**📍 Configuración de Inicio y Fin**")
+        st.sidebar.info("Elige dónde empezar y terminar. Si seleccionas 'IA Decide', el sistema buscará la opción más rápida.")
+        
+        for dia in dias_seleccionados:
+            for ruta in rutas_seleccionadas:
+                df_unicaruta = df_filtrado_dias[(df_filtrado_dias['Día'] == dia) & (df_filtrado_dias['Ruta'] == ruta)].reset_index(drop=True)
+                if not df_unicaruta.empty:
+                    lugares_lista = df_unicaruta['Lugar'].tolist()
+                    id_ruta = f"{dia} - {ruta}"
+                    
+                    st.sidebar.markdown(f"**Ruta:** {id_ruta}")
+                    opciones_lugar = ["🤖 IA Decide"] + lugares_lista
+                    
+                    # Por defecto: Inicio lo decide la IA, Final es el último de la lista
+                    sel_ini = st.sidebar.selectbox("Punto de Inicio:", opciones_lugar, index=0, key=f"ini_{id_ruta}")
+                    sel_fin = st.sidebar.selectbox("Punto Final:", opciones_lugar, index=len(opciones_lugar)-1, key=f"fin_{id_ruta}")
+                    
+                    opciones_inicio_dict[id_ruta] = sel_ini
+                    opciones_fin_dict[id_ruta] = sel_fin
+                    st.sidebar.markdown("<br>", unsafe_allow_html=True)
 
 elif tipo_ruteo == "Creación de rutas propias":
     st.sidebar.markdown("---")
     st.sidebar.header("Configuración de Flota Automática")
-    st.sidebar.info("Modo Pétalo + Equilibrador 100% ORS: Tiempo real de calle garantizado.")
     
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
@@ -291,7 +295,7 @@ elif tipo_ruteo == "Creación de rutas propias":
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Conectando 100% con OpenRouteService... (Protección anti-caídas activada)"):
+    with st.spinner("Procesando conectividad e IA..."):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -302,7 +306,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
         headers = {'Authorization': api_key, 'Content-Type': 'application/json'}
 
         # ==========================================================
-        # LÓGICA 1 Y 2: RUTEO CLÁSICO Y OPTIMIZADO
+        # LÓGICA 1 Y 2: RUTEO CLÁSICO Y OPTIMIZADO (CON INICIO/FIN INTELIGENTE)
         # ==========================================================
         if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"]:
             for dia in dias_seleccionados:
@@ -328,104 +332,122 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         nodos_ordenados = list(range(len(df_ruta)))
                         coords_ordenadas = lista_coords
                     else: 
-                        chunk_size_opt = 40
-                        for i in range(0, len(lista_coords), chunk_size_opt):
-                            chunk_coords = lista_coords[i:i+chunk_size_opt]
-                            original_indices = list(range(i, i+len(chunk_coords)))
-                            
-                            if len(chunk_coords) < 2:
-                                nodos_ordenados.extend(original_indices)
-                                continue
-                                
-                            matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(chunk_coords, headers)
+                        num_locs = len(lista_coords)
+                        if num_locs < 2:
+                            nodos_ordenados = [0]
+                            coords_ordenadas = lista_coords
+                        else:
+                            matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
                             
                             if err_matriz == "QUOTA_EXCEEDED":
-                                st.error(f"❌ ¡SALDO DIARIO AGOTADO en la ruta {ruta}! Pega tu propia clave en el menú lateral para continuar.")
+                                st.error(f"❌ ¡SALDO DIARIO AGOTADO en la ruta {ruta}! Pega tu propia clave en el menú lateral.")
                                 st.stop()
                                 
                             if not err_matriz:
-                                num_locs = len(chunk_coords)
-                                is_last_chunk = (i + chunk_size_opt >= len(lista_coords))
-                                has_local_end = False
+                                # Lógica de Nodos Fantasma para dar libertad a la IA
+                                # N es el Inicio Fantasma, N+1 es el Fin Fantasma
+                                N = num_locs
+                                extended_dist = [[0] * (N + 2) for _ in range(N + 2)]
                                 
-                                if is_last_chunk and punto_final_fijo:
-                                    global_end_idx = indices_puntos_finales.get(id_unico, len(lista_coords)-1)
-                                    if global_end_idx in original_indices:
-                                        local_end_idx = original_indices.index(global_end_idx)
-                                        manager = pywrapcp.RoutingIndexManager(num_locs, 1, [0], [local_end_idx])
-                                        has_local_end = True
-                                    else:
-                                        manager = pywrapcp.RoutingIndexManager(num_locs, 1, 0)
+                                # Copiamos la matriz original
+                                for i in range(N):
+                                    for j in range(N):
+                                        extended_dist[i][j] = int(matriz_dist[i][j])
+                                        
+                                # Configuración del Punto de Inicio
+                                sel_inicio = opciones_inicio_dict.get(id_unico, "🤖 IA Decide")
+                                if sel_inicio == "🤖 IA Decide":
+                                    for j in range(N): extended_dist[N][j] = 0
                                 else:
-                                    manager = pywrapcp.RoutingIndexManager(num_locs, 1, 0)
+                                    idx_inicio = df_ruta['Lugar'].tolist().index(sel_inicio)
+                                    for j in range(N): extended_dist[N][j] = 99999999
+                                    extended_dist[N][idx_inicio] = 0
                                     
+                                # Configuración del Punto Final
+                                sel_fin = opciones_fin_dict.get(id_unico, "🤖 IA Decide")
+                                if sel_fin == "🤖 IA Decide":
+                                    for i in range(N): extended_dist[i][N+1] = 0
+                                else:
+                                    idx_fin = df_ruta['Lugar'].tolist().index(sel_fin)
+                                    for i in range(N): extended_dist[i][N+1] = 99999999
+                                    extended_dist[idx_fin][N+1] = 0
+
+                                manager = pywrapcp.RoutingIndexManager(N + 2, 1, [N], [N+1])
                                 routing = pywrapcp.RoutingModel(manager)
                                 
                                 def distance_callback(from_index, to_index):
-                                    return int(matriz_dist[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
+                                    from_node = manager.IndexToNode(from_index)
+                                    to_node = manager.IndexToNode(to_index)
+                                    return extended_dist[from_node][to_node]
+                                    
                                 transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                                 routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                                 
                                 search_parameters = pywrapcp.DefaultRoutingSearchParameters()
                                 search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                                search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+                                search_parameters.time_limit.seconds = 5 
+                                
                                 solution = routing.SolveWithParameters(search_parameters)
                                 
                                 if solution:
                                     idx = routing.Start(0)
                                     while not routing.IsEnd(idx):
-                                        nodos_ordenados.append(original_indices[manager.IndexToNode(idx)])
+                                        node = manager.IndexToNode(idx)
+                                        if node < N: # Ignoramos los fantasmas en la lista final
+                                            nodos_ordenados.append(node)
                                         idx = solution.Value(routing.NextVar(idx))
-                                    if has_local_end:
-                                        nodos_ordenados.append(original_indices[manager.IndexToNode(idx)])
+                                    coords_ordenadas = [lista_coords[i] for i in nodos_ordenados]
                                 else:
-                                    nodos_ordenados.extend(original_indices)
+                                    st.error(f"No se encontró solución lógica para {ruta}. Revisa los puntos.")
+                                    continue
                             else:
-                                st.error(f"Error Matriz en tramo de {ruta}: {err_matriz}")
-                                nodos_ordenados.extend(original_indices)
-                                
-                        coords_ordenadas = [lista_coords[idx] for idx in nodos_ordenados]
+                                st.error(f"Error Matriz en {ruta}: {err_matriz}")
+                                continue
 
-                    geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
-                    
-                    if err_dirs == "QUOTA_EXCEEDED":
-                        st.error(f"❌ ¡SALDO DIARIO AGOTADO al dibujar la ruta {ruta}! Pega tu propia clave en el menú lateral.")
-                        st.stop()
+                    # Dibujado real en mapa (para ambos modos)
+                    if len(coords_ordenadas) > 1:
+                        geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
                         
-                    if not err_dirs:
-                        props = geojson['features'][0]['properties']['summary']
-                        segments = geojson['features'][0]['properties'].get('segments', [])
-                        
-                        paradas_info = []
-                        for nodo_idx in nodos_ordenados:
-                            fila = df_ruta.iloc[nodo_idx]
-                            paradas_info.append({
-                                "Día": fila.get('Día',''), "Ruta": fila.get('Ruta',''),
-                                "Departamento": fila.get('Departamento',''), "Lugar": fila.get('Lugar',''),
-                                "Coordenadas": fila.get('Coordenadas','')
+                        if err_dirs == "QUOTA_EXCEEDED":
+                            st.error(f"❌ ¡SALDO DIARIO AGOTADO al dibujar {ruta}! Pega tu clave.")
+                            st.stop()
+                            
+                        if not err_dirs:
+                            props = geojson['features'][0]['properties']['summary']
+                            segments = geojson['features'][0]['properties'].get('segments', [])
+                            
+                            paradas_info = []
+                            for nodo_idx in nodos_ordenados:
+                                fila = df_ruta.iloc[nodo_idx]
+                                paradas_info.append({
+                                    "Día": fila.get('Día',''), "Ruta": fila.get('Ruta',''),
+                                    "Departamento": fila.get('Departamento',''), "Lugar": fila.get('Lugar',''),
+                                    "Coordenadas": fila.get('Coordenadas','')
+                                })
+
+                            datos_para_resumen.append({
+                                "id_unico": id_unico, "dia": dia, "ruta": ruta,
+                                "puntos": len(df_ruta), "dist_km": round(props['distance']/1000, 2),
+                                "drive_mins": round(props['duration']/60, 0), "color": color_actual,
+                                "paradas": paradas_info, "segmentos": segments
                             })
-
-                        datos_para_resumen.append({
-                            "id_unico": id_unico, "dia": dia, "ruta": ruta,
-                            "puntos": len(df_ruta), "dist_km": round(props['distance']/1000, 2),
-                            "drive_mins": round(props['duration']/60, 0), "color": color_actual,
-                            "paradas": paradas_info, "segmentos": segments
-                        })
-                        
-                        fg_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta}")
-                        folium.GeoJson(geojson, style_function=lambda x, c=color_actual: {'color':c, 'weight':4, 'opacity':0.8}).add_to(fg_trazado)
-                        
-                        for i, nodo_idx in enumerate(nodos_ordenados):
-                            fila = df_ruta.iloc[nodo_idx]
-                            lat, lon = fila['Coords_Procesadas'][1], fila['Coords_Procesadas'][0]
-                            popup_txt = f"<b>{i+1}. {fila.get('Lugar','')}</b><br>{fila.get('Departamento','')}"
-                            icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{i+1}</div>"
-                            folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
-                        fg_trazado.add_to(mapa_calculado)
-                    else:
-                        st.error(f"Error trazando calles de {ruta}: {err_dirs}")
+                            
+                            fg_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta}")
+                            folium.GeoJson(geojson, style_function=lambda x, c=color_actual: {'color':c, 'weight':4, 'opacity':0.8}).add_to(fg_trazado)
+                            
+                            for i, nodo_idx in enumerate(nodos_ordenados):
+                                fila = df_ruta.iloc[nodo_idx]
+                                lat, lon = fila['Coords_Procesadas'][1], fila['Coords_Procesadas'][0]
+                                popup_txt = f"<b>{i+1}. {fila.get('Lugar','')}</b><br>{fila.get('Departamento','')}"
+                                icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{i+1}</div>"
+                                folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
+                            fg_trazado.add_to(mapa_calculado)
+                        else:
+                            st.error(f"Error trazando calles de {ruta}: {err_dirs}")
 
         # ==========================================================
-        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS 
+        # LÓGICA 3: CREACIÓN DE RUTAS PROPIAS (INTACTA SEGÚN TU PEDIDO)
         # ==========================================================
         elif tipo_ruteo == "Creación de rutas propias":
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
