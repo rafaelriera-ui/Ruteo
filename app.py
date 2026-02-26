@@ -226,13 +226,17 @@ df_filtrado_dias = df[df['Día'].isin(dias_seleccionados)]
 st.sidebar.markdown("---")
 st.sidebar.header("2. Estrategia de Ruteo")
 
+# LAS 7 OPCIONES DEFINITIVAS
 tipo_ruteo = st.sidebar.radio(
     "Selecciona cómo armar las rutas:",
     [
         "Ruteo según Excel (Orden Original)", 
         "Ruteo Optimizado (IA)", 
         "Creación de rutas propias (Ideal Libre)",
-        "Creación de rutas propias (Por Departamentos)"
+        "Creación de rutas propias (Departamental Flexible)",
+        "Creación de rutas propias (Departamental Fijo)",
+        "Creación de rutas propias (Ideal Libre - Patrón Fijo)",
+        "Creación de rutas propias (Departamental Fijo - Patrón Fijo)"
     ]
 )
 
@@ -264,13 +268,10 @@ if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"
                 if not df_unicaruta.empty:
                         lugares_lista = df_unicaruta['Lugar'].tolist()
                         id_ruta = f"{dia} - {ruta}"
-                        
                         st.sidebar.markdown(f"**Ruta:** {id_ruta}")
                         opciones_lugar = ["🤖 IA Decide"] + lugares_lista
-                        
                         sel_ini = st.sidebar.selectbox("Punto de Inicio:", opciones_lugar, index=0, key=f"ini_{id_ruta}")
                         sel_fin = st.sidebar.selectbox("Punto Final:", opciones_lugar, index=len(opciones_lugar)-1, key=f"fin_{id_ruta}")
-                        
                         opciones_inicio_dict[id_ruta] = sel_ini
                         opciones_fin_dict[id_ruta] = sel_fin
                         st.sidebar.markdown("<br>", unsafe_allow_html=True)
@@ -279,10 +280,14 @@ elif "Creación de rutas propias" in tipo_ruteo:
     st.sidebar.markdown("---")
     st.sidebar.header("Configuración de Flota Automática")
     
-    if "Departamentos" in tipo_ruteo:
-        st.sidebar.info("🏢 Modo Departamentos: La IA unirá departamentos para ahorrar vehículos, pero terminará de visitar todos los puntos de una zona antes de cruzar a la siguiente.")
+    if "Patrón Fijo" in tipo_ruteo:
+        st.sidebar.info("🗓️ Modo Patrón Maestro: Analiza todos los días seleccionados para crear un 'Molde Base'. Las rutas de cada día mantendrán siempre la misma forma y orden, simplemente saltando los clientes que no tengan entregas ese día.")
+    elif "Fijo" in tipo_ruteo:
+        st.sidebar.info("🏢 Modo Fijo: Corta el mapa y calcula flota 100% independiente por departamento. NUNCA mezcla zonas en un auto.")
+    elif "Flexible" in tipo_ruteo:
+        st.sidebar.info("🏘️ Modo Flexible: Agrupa por zona para dar orden, pero SÍ PERMITE cruzar fronteras si eso ahorra crear un vehículo entero.")
     else:
-        st.sidebar.info("🚀 Modo Ideal Libre: Ignora fronteras geográficas. Prioriza eficiencia pura, kilómetros y ahorro máximo de vehículos.")
+        st.sidebar.info("🚀 Modo Ideal Libre: Ignora fronteras geográficas. Prioriza únicamente tiempo, kilómetros y ahorro máximo de vehículos.")
         
     opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
     punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
@@ -348,7 +353,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             coords_ordenadas = lista_coords
                         else:
                             matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
-                            
                             if err_matriz == "QUOTA_EXCEEDED":
                                 st.error(f"❌ ¡SALDO DIARIO AGOTADO en la ruta {ruta}! Pega tu propia clave en el menú lateral.")
                                 st.stop()
@@ -405,7 +409,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                         idx = solution.Value(routing.NextVar(idx))
                                     coords_ordenadas = [lista_coords[i] for i in nodos_ordenados]
                                 else:
-                                    st.error(f"No se encontró solución lógica para {ruta}. Revisa los puntos.")
+                                    st.error(f"No se encontró solución lógica para {ruta}.")
                                     continue
                             else:
                                 st.error(f"Error Matriz en {ruta}: {err_matriz}")
@@ -413,9 +417,8 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
 
                     if len(coords_ordenadas) > 1:
                         geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
-                        
                         if err_dirs == "QUOTA_EXCEEDED":
-                            st.error(f"❌ ¡SALDO DIARIO AGOTADO al dibujar {ruta}! Pega tu clave.")
+                            st.error(f"❌ ¡SALDO DIARIO AGOTADO al dibujar {ruta}!")
                             st.stop()
                             
                         if not err_dirs:
@@ -452,9 +455,9 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             st.error(f"Error trazando calles de {ruta}: {err_dirs}")
 
         # ==========================================================
-        # LÓGICA 3 Y 4: CREACIÓN DE RUTAS PROPIAS (LIBRE VS DEPARTAMENTOS)
+        # LÓGICA 3 Y 4: CREACIÓN DE RUTAS PROPIAS (LIBRE Y FLEXIBLE - DIARIO)
         # ==========================================================
-        elif "Creación de rutas propias" in tipo_ruteo:
+        elif tipo_ruteo in ["Creación de rutas propias (Ideal Libre)", "Creación de rutas propias (Departamental Flexible)"]:
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
             
             for dia in dias_seleccionados:
@@ -471,9 +474,8 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                 dibujar_geozona_circular(lista_coords, f"🌍 DÍA: {dia} (Zona)", "black", mapa_calculado)
 
                 matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
-                
                 if err_matriz == "QUOTA_EXCEEDED":
-                    st.error(f"❌ ¡SALDO DIARIO AGOTADO en el Día {dia}! Pega tu propia clave en el menú lateral para continuar.")
+                    st.error(f"❌ ¡SALDO DIARIO AGOTADO en el Día {dia}!")
                     st.stop()
                     
                 if not err_matriz:
@@ -490,10 +492,9 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             if val_dur is None:
                                 st.error(f"❌ Error de Mapa: El punto '{df_dia.iloc[i]['Lugar']}' no tiene conexión por calle.")
                                 st.stop()
-                                
                             tiempo_minimo_viaje = int(min_parada_vrp * 60) + int(val_dur)
                             if tiempo_minimo_viaje > max_time_sec:
-                                st.error(f"❌ Error Físico Real: Ir desde '{df_dia.iloc[i]['Lugar']}' hasta el destino final toma por sí solo {tiempo_minimo_viaje//60} min reales de viaje por calle, superando tu límite de {max_time_sec//60} min.")
+                                st.error(f"❌ Error Físico Real: Ir desde '{df_dia.iloc[i]['Lugar']}' hasta el destino final toma por sí solo {tiempo_minimo_viaje//60} min.")
                                 st.stop()
 
                     num_vehicles = num_locs 
@@ -506,19 +507,13 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         val = matriz_dist[from_node][to_node]
                         dist = int(val) if val is not None else 99999999 
                         
-                        # Penalidad 1: Abrir un auto nuevo (Prioridad Absoluta para ahorrar flota)
-                        if from_node == dummy_idx and to_node != end_idx:
-                            return dist + 10000000 
+                        if from_node == dummy_idx and to_node != end_idx: return dist + 10000000 
                             
-                        # Penalidad 2: Impuesto de Frontera Departamental
-                        # Si elige el modo Departamentos, cruzar a otro municipio cuesta 500,000 pts extra.
-                        # Esto obliga al auto a "barrer" por completo un departamento antes de pasar al siguiente.
-                        if tipo_ruteo == "Creación de rutas propias (Por Departamentos)":
+                        if "Flexible" in tipo_ruteo:
                             if from_node < num_locs and to_node < num_locs and from_node != end_idx and to_node != end_idx and from_node != dummy_idx:
                                 dept_f = str(df_dia.iloc[from_node].get('Departamento', '')).strip().lower()
                                 dept_t = str(df_dia.iloc[to_node].get('Departamento', '')).strip().lower()
-                                if dept_f and dept_t and dept_f != dept_t:
-                                    dist += 500000 
+                                if dept_f and dept_t and dept_f != dept_t: dist += 500000 
                                     
                         return dist
                         
@@ -551,20 +546,15 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         for vehicle_id in range(num_vehicles):
                             index = routing.Start(vehicle_id)
                             first_visit = solution.Value(routing.NextVar(index))
-                            
-                            if manager.IndexToNode(first_visit) == end_idx:
-                                continue 
-                            
+                            if manager.IndexToNode(first_visit) == end_idx: continue 
                             nodos_ordenados = []
                             while not routing.IsEnd(index):
                                 node = manager.IndexToNode(index)
-                                if node != dummy_idx:
-                                    nodos_ordenados.append(node)
+                                if node != dummy_idx: nodos_ordenados.append(node)
                                 index = solution.Value(routing.NextVar(index))
                             nodos_ordenados.append(end_idx)
                             
                             coords_ordenadas = [lista_coords[i] for i in nodos_ordenados]
-                            
                             ruta_nombre = f"Auto {vehiculo_real_count}"
                             id_unico = f"{dia} - {ruta_nombre}"
                             vehiculo_real_count += 1
@@ -572,15 +562,13 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             color_idx += 1
                             
                             geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
-                            
                             if err_dirs == "QUOTA_EXCEEDED":
-                                st.error(f"❌ ¡SALDO DIARIO AGOTADO al dibujar {ruta_nombre}! Pega tu propia clave.")
+                                st.error(f"❌ ¡SALDO DIARIO AGOTADO al dibujar {ruta_nombre}!")
                                 st.stop()
                                 
                             if not err_dirs:
                                 props = geojson['features'][0]['properties']['summary']
                                 segments = geojson['features'][0]['properties'].get('segments', [])
-                                
                                 paradas_info = []
                                 for nodo_idx in nodos_ordenados:
                                     fila = df_dia.iloc[nodo_idx]
@@ -589,31 +577,392 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                         "Departamento": fila.get('Departamento',''), "Lugar": fila.get('Lugar',''),
                                         "Coordenadas": fila.get('Coordenadas','')
                                     })
-
                                 datos_para_resumen.append({
                                     "id_unico": id_unico, "dia": dia, "ruta": ruta_nombre,
                                     "puntos": len(nodos_ordenados), "dist_km": round(props['distance']/1000, 2),
                                     "drive_mins": round(props['duration']/60, 0), "color": color_actual,
                                     "paradas": paradas_info, "segmentos": segments
                                 })
-                                
                                 fg_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta_nombre} ({dia})")
                                 folium.GeoJson(geojson, style_function=lambda x, c=color_actual: {'color':c, 'weight':4, 'opacity':0.8}).add_to(fg_trazado)
-                                
                                 for i, nodo_idx in enumerate(nodos_ordenados):
                                     fila = df_dia.iloc[nodo_idx]
                                     lat, lon = fila['Coords_Procesadas'][1], fila['Coords_Procesadas'][0]
                                     popup_txt = f"<b>{i+1}. {fila.get('Lugar','')}</b><br>{fila.get('Departamento','')}"
                                     icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{i+1}</div>"
                                     folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
-                                
                                 fg_trazado.add_to(mapa_calculado)
                             else:
                                 st.error(f"Error en trazado: {err_dirs}")
                     else:
-                        st.error(f"❌ Imposible matemático en el {dia}. La IA no pudo encajar todos los puntos.")
+                        st.error(f"❌ Imposible matemático en el {dia}.")
                 else:
                     st.error(f"Error Matriz {dia}: {err_matriz}")
+
+        # ==========================================================
+        # LÓGICA 5: CREACIÓN DE RUTAS PROPIAS (DEPARTAMENTAL FIJO - DIARIO)
+        # ==========================================================
+        elif tipo_ruteo == "Creación de rutas propias (Departamental Fijo)":
+            destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
+            
+            for dia in dias_seleccionados:
+                df_dia_completo = df[df['Día'] == dia].copy().reset_index(drop=True)
+                lista_coords_dia = df_dia_completo['Coords_Procesadas'].tolist()
+                if len(lista_coords_dia) > 1:
+                    dibujar_geozona_circular(lista_coords_dia, f"🌍 DÍA: {dia} (Zona Global)", "black", mapa_calculado)
+
+                dept_series = df_dia_completo[df_dia_completo['Lugar'] != punto_final_vrp]['Departamento']
+                departamentos = [d for d in dept_series.unique() if pd.notna(d) and str(d).strip() != '']
+                vehiculo_real_count = 1
+                
+                for dept in departamentos:
+                    df_dept = df_dia_completo[(df_dia_completo['Departamento'] == dept) & (df_dia_completo['Lugar'] != punto_final_vrp)].copy().reset_index(drop=True)
+                    if df_dept.empty: continue
+                    
+                    df_dept = pd.concat([df_dept, destino_row.to_frame().T], ignore_index=True)
+                    end_idx = len(df_dept) - 1
+                    lista_coords = df_dept['Coords_Procesadas'].tolist()
+                    num_locs = len(lista_coords)
+                    
+                    if num_locs < 2: continue
+
+                    matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
+                    if err_matriz == "QUOTA_EXCEEDED":
+                        st.error(f"❌ ¡SALDO DIARIO AGOTADO en el Día {dia}, Depto {dept}!")
+                        st.stop()
+                        
+                    if not err_matriz:
+                        dummy_idx = num_locs
+                        for i in range(num_locs):
+                            matriz_dist[i].append(0)
+                            matriz_dur[i].append(0)
+                        matriz_dist.append([0] * (num_locs + 1))
+                        matriz_dur.append([0] * (num_locs + 1))
+                        
+                        for i in range(num_locs):
+                            if i != dummy_idx and i != end_idx:
+                                val_dur = matriz_dur[i][end_idx]
+                                if val_dur is None:
+                                    st.error(f"❌ Error de Mapa: El punto '{df_dept.iloc[i]['Lugar']}' no tiene conexión por calle.")
+                                    st.stop()
+                                tiempo_minimo_viaje = int(min_parada_vrp * 60) + int(val_dur)
+                                if tiempo_minimo_viaje > max_time_sec:
+                                    st.error(f"❌ Error Físico Real: Ir desde '{df_dept.iloc[i]['Lugar']}' ({dept}) hasta el destino toma {tiempo_minimo_viaje//60} min reales.")
+                                    st.stop()
+
+                        num_vehicles = num_locs 
+                        manager = pywrapcp.RoutingIndexManager(num_locs + 1, num_vehicles, [dummy_idx] * num_vehicles, [int(end_idx)] * num_vehicles)
+                        routing = pywrapcp.RoutingModel(manager)
+                        
+                        def distance_callback(from_index, to_index):
+                            from_node = manager.IndexToNode(from_index)
+                            to_node = manager.IndexToNode(to_index)
+                            val = matriz_dist[from_node][to_node]
+                            dist = int(val) if val is not None else 99999999 
+                            if from_node == dummy_idx and to_node != end_idx: return dist + 10000000 
+                            return dist
+                            
+                        transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+                        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+                        
+                        def time_callback(from_index, to_index):
+                            from_node = manager.IndexToNode(from_index)
+                            to_node = manager.IndexToNode(to_index)
+                            val_dur = matriz_dur[from_node][to_node]
+                            drive_time = int(val_dur) if val_dur is not None else 99999999 
+                            wait_time = int(min_parada_vrp * 60) if to_node != dummy_idx and to_node != end_idx else 0
+                            return drive_time + wait_time
+                            
+                        time_callback_index = routing.RegisterTransitCallback(time_callback)
+                        routing.AddDimension(time_callback_index, 0, max_time_sec, True, "Time")
+                        time_dimension = routing.GetDimensionOrDie("Time")
+                        time_dimension.SetGlobalSpanCostCoefficient(50)
+
+                        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                        search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+                        search_parameters.time_limit.seconds = 10 
+                        
+                        solution = routing.SolveWithParameters(search_parameters)
+                        
+                        if solution:
+                            for vehicle_id in range(num_vehicles):
+                                index = routing.Start(vehicle_id)
+                                first_visit = solution.Value(routing.NextVar(index))
+                                if manager.IndexToNode(first_visit) == end_idx: continue 
+                                nodos_ordenados = []
+                                while not routing.IsEnd(index):
+                                    node = manager.IndexToNode(index)
+                                    if node != dummy_idx: nodos_ordenados.append(node)
+                                    index = solution.Value(routing.NextVar(index))
+                                nodos_ordenados.append(end_idx)
+                                
+                                coords_ordenadas = [lista_coords[i] for i in nodos_ordenados]
+                                nombre_dept_limpio = str(dept).strip()
+                                ruta_nombre = f"Auto {vehiculo_real_count} ({nombre_dept_limpio})"
+                                id_unico = f"{dia} - {ruta_nombre}"
+                                vehiculo_real_count += 1
+                                color_actual = colores[color_idx % len(colores)]
+                                color_idx += 1
+                                
+                                geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
+                                if err_dirs == "QUOTA_EXCEEDED":
+                                    st.error(f"❌ ¡SALDO DIARIO AGOTADO al dibujar {ruta_nombre}!")
+                                    st.stop()
+                                if not err_dirs:
+                                    props = geojson['features'][0]['properties']['summary']
+                                    segments = geojson['features'][0]['properties'].get('segments', [])
+                                    paradas_info = []
+                                    for nodo_idx in nodos_ordenados:
+                                        fila = df_dept.iloc[nodo_idx]
+                                        paradas_info.append({
+                                            "Día": fila.get('Día',''), "Ruta": ruta_nombre, 
+                                            "Departamento": fila.get('Departamento',''), "Lugar": fila.get('Lugar',''),
+                                            "Coordenadas": fila.get('Coordenadas','')
+                                        })
+                                    datos_para_resumen.append({
+                                        "id_unico": id_unico, "dia": dia, "ruta": ruta_nombre,
+                                        "puntos": len(nodos_ordenados), "dist_km": round(props['distance']/1000, 2),
+                                        "drive_mins": round(props['duration']/60, 0), "color": color_actual,
+                                        "paradas": paradas_info, "segmentos": segments
+                                    })
+                                    fg_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta_nombre} ({dia})")
+                                    folium.GeoJson(geojson, style_function=lambda x, c=color_actual: {'color':c, 'weight':4, 'opacity':0.8}).add_to(fg_trazado)
+                                    for i, nodo_idx in enumerate(nodos_ordenados):
+                                        fila = df_dept.iloc[nodo_idx]
+                                        lat, lon = fila['Coords_Procesadas'][1], fila['Coords_Procesadas'][0]
+                                        popup_txt = f"<b>{i+1}. {fila.get('Lugar','')}</b><br>{fila.get('Departamento','')}"
+                                        icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{i+1}</div>"
+                                        folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
+                                    fg_trazado.add_to(mapa_calculado)
+                                else:
+                                    st.error(f"Error en trazado: {err_dirs}")
+                        else:
+                            st.error(f"❌ Imposible matemático en el {dia} para {dept}.")
+                    else:
+                        st.error(f"Error Matriz {dia} - {dept}: {err_matriz}")
+
+        # ==========================================================
+        # LÓGICA 6 Y 7: CREACIÓN DE RUTAS PROPIAS (PATRÓN FIJO / MASTER PLAN)
+        # ==========================================================
+        elif "Patrón Fijo" in tipo_ruteo:
+            destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
+
+            st.info("🧠 Generando Patrón Maestro: Analizando todos los puntos del Excel para crear moldes inmutables de rutas...")
+            
+            # Unimos todos los puntos de todos los días seleccionados en un único "Mapa Maestro" sin repetidos
+            df_master_total = df_filtrado_dias[df_filtrado_dias['Lugar'] != punto_final_vrp].drop_duplicates(subset=['Lugar']).copy().reset_index(drop=True)
+
+            rutas_maestras_base = []
+            vehiculo_real_count = 1
+
+            # A) MODO PATRÓN FIJO DEPARTAMENTAL
+            if "Departamental" in tipo_ruteo:
+                dept_series = df_master_total['Departamento']
+                departamentos = [d for d in dept_series.unique() if pd.notna(d) and str(d).strip() != '']
+
+                for dept in departamentos:
+                    df_target = df_master_total[df_master_total['Departamento'] == dept].copy().reset_index(drop=True)
+                    if df_target.empty: continue
+                    df_target = pd.concat([df_target, destino_row.to_frame().T], ignore_index=True)
+
+                    lista_coords = df_target['Coords_Procesadas'].tolist()
+                    num_locs = len(lista_coords)
+                    end_idx = num_locs - 1
+                    if num_locs < 2: continue
+
+                    matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
+                    if err_matriz: st.error(err_matriz); st.stop()
+
+                    dummy_idx = num_locs
+                    for i in range(num_locs):
+                        matriz_dist[i].append(0); matriz_dur[i].append(0)
+                    matriz_dist.append([0]*(num_locs+1)); matriz_dur.append([0]*(num_locs+1))
+
+                    num_vehicles = num_locs
+                    manager = pywrapcp.RoutingIndexManager(num_locs + 1, num_vehicles, [dummy_idx]*num_vehicles, [end_idx]*num_vehicles)
+                    routing = pywrapcp.RoutingModel(manager)
+
+                    def d_call(f, t):
+                        fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
+                        v = matriz_dist[fn][tn]
+                        dist = int(v) if v is not None else 99999999
+                        if fn == dummy_idx and tn != end_idx: return dist + 10000000
+                        return dist
+
+                    def t_call(f, t):
+                        fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
+                        vd = matriz_dur[fn][tn]
+                        d_time = int(vd) if vd is not None else 99999999
+                        wt = int(min_parada_vrp*60) if tn != dummy_idx and tn != end_idx else 0
+                        return d_time + wt
+
+                    transit_cb = routing.RegisterTransitCallback(d_call)
+                    routing.SetArcCostEvaluatorOfAllVehicles(transit_cb)
+                    time_cb = routing.RegisterTransitCallback(t_call)
+                    
+                    routing.AddDimension(time_cb, 0, max_time_sec, True, "Time")
+                    time_dim = routing.GetDimensionOrDie("Time")
+                    time_dim.SetGlobalSpanCostCoefficient(50)
+
+                    search_params = pywrapcp.DefaultRoutingSearchParameters()
+                    search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                    search_params.time_limit.seconds = 10
+
+                    sol = routing.SolveWithParameters(search_params)
+                    if sol:
+                        for vid in range(num_vehicles):
+                            idx = routing.Start(vid)
+                            fv = sol.Value(routing.NextVar(idx))
+                            if manager.IndexToNode(fv) == end_idx: continue
+
+                            nodos_ord = []
+                            while not routing.IsEnd(idx):
+                                n = manager.IndexToNode(idx)
+                                if n != dummy_idx: nodos_ord.append(n)
+                                idx = sol.Value(routing.NextVar(idx))
+                            nodos_ord.append(end_idx)
+
+                            lugares = [df_target.iloc[i]['Lugar'] for i in nodos_ord]
+                            r_name = f"Auto {vehiculo_real_count} ({str(dept).strip()})"
+                            rutas_maestras_base.append({"nombre": r_name, "lugares": lugares, "color_idx": vehiculo_real_count-1})
+                            vehiculo_real_count += 1
+
+            # B) MODO PATRÓN FIJO IDEAL LIBRE
+            else:
+                df_target = pd.concat([df_master_total, destino_row.to_frame().T], ignore_index=True)
+                lista_coords = df_target['Coords_Procesadas'].tolist()
+                num_locs = len(lista_coords)
+                end_idx = num_locs - 1
+
+                if num_locs >= 2:
+                    matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
+                    if err_matriz: st.error(err_matriz); st.stop()
+
+                    dummy_idx = num_locs
+                    for i in range(num_locs):
+                        matriz_dist[i].append(0); matriz_dur[i].append(0)
+                    matriz_dist.append([0]*(num_locs+1)); matriz_dur.append([0]*(num_locs+1))
+
+                    num_vehicles = num_locs
+                    manager = pywrapcp.RoutingIndexManager(num_locs + 1, num_vehicles, [dummy_idx]*num_vehicles, [end_idx]*num_vehicles)
+                    routing = pywrapcp.RoutingModel(manager)
+
+                    def d_call(f, t):
+                        fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
+                        v = matriz_dist[fn][tn]
+                        dist = int(v) if v is not None else 99999999
+                        if fn == dummy_idx and tn != end_idx: return dist + 10000000
+                        return dist
+
+                    def t_call(f, t):
+                        fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
+                        vd = matriz_dur[fn][tn]
+                        d_time = int(vd) if vd is not None else 99999999
+                        wt = int(min_parada_vrp*60) if tn != dummy_idx and tn != end_idx else 0
+                        return d_time + wt
+
+                    transit_cb = routing.RegisterTransitCallback(d_call)
+                    routing.SetArcCostEvaluatorOfAllVehicles(transit_cb)
+                    time_cb = routing.RegisterTransitCallback(t_call)
+                    
+                    routing.AddDimension(time_cb, 0, max_time_sec, True, "Time")
+                    time_dim = routing.GetDimensionOrDie("Time")
+                    time_dim.SetGlobalSpanCostCoefficient(50)
+
+                    search_params = pywrapcp.DefaultRoutingSearchParameters()
+                    search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                    search_params.time_limit.seconds = 20
+
+                    sol = routing.SolveWithParameters(search_params)
+                    if sol:
+                        for vid in range(num_vehicles):
+                            idx = routing.Start(vid)
+                            fv = sol.Value(routing.NextVar(idx))
+                            if manager.IndexToNode(fv) == end_idx: continue
+
+                            nodos_ord = []
+                            while not routing.IsEnd(idx):
+                                n = manager.IndexToNode(idx)
+                                if n != dummy_idx: nodos_ord.append(n)
+                                idx = sol.Value(routing.NextVar(idx))
+                            nodos_ord.append(end_idx)
+
+                            lugares = [df_target.iloc[i]['Lugar'] for i in nodos_ord]
+                            r_name = f"Auto {vehiculo_real_count}"
+                            rutas_maestras_base.append({"nombre": r_name, "lugares": lugares, "color_idx": vehiculo_real_count-1})
+                            vehiculo_real_count += 1
+
+            # --- 3. APLICAR EL PATRÓN A CADA DÍA ---
+            st.info("🗓️ Imprimiendo el Patrón Maestro en los días seleccionados (saltando clientes sin pedido)...")
+            for dia in dias_seleccionados:
+                df_dia = df[df['Día'] == dia].copy().reset_index(drop=True)
+                if punto_final_vrp not in df_dia['Lugar'].values:
+                    df_dia = pd.concat([df_dia, destino_row.to_frame().T], ignore_index=True)
+
+                lugares_del_dia = set(df_dia['Lugar'].tolist())
+                lista_coords_dia = df_dia['Coords_Procesadas'].tolist()
+                
+                if len(lista_coords_dia) > 1:
+                    dibujar_geozona_circular(lista_coords_dia, f"🌍 DÍA: {dia}", "black", mapa_calculado)
+
+                for ruta_maestra in rutas_maestras_base:
+                    # Filtramos la ruta maestra para dejar SOLO los clientes que existen en este dia específico
+                    lugares_hoy = [l for l in ruta_maestra['lugares'] if l in lugares_del_dia]
+
+                    if len(lugares_hoy) < 2: continue # Si hoy el auto está vacío o solo va al punto final, lo cancelamos
+
+                    if lugares_hoy[-1] != punto_final_vrp:
+                        if punto_final_vrp in lugares_hoy:
+                            lugares_hoy.remove(punto_final_vrp)
+                        lugares_hoy.append(punto_final_vrp)
+
+                    filas_hoy = []
+                    coords_ordenadas = []
+                    for l in lugares_hoy:
+                        # Extraemos la fila exacta de ese día para obtener coordenadas
+                        fila = df_dia[df_dia['Lugar'] == l].iloc[0]
+                        filas_hoy.append(fila)
+                        coords_ordenadas.append(fila['Coords_Procesadas'])
+
+                    df_ruta_hoy = pd.DataFrame(filas_hoy)
+                    ruta_nombre = ruta_maestra["nombre"]
+                    id_unico = f"{dia} - {ruta_nombre}"
+                    color_actual = colores[ruta_maestra["color_idx"] % len(colores)]
+
+                    geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
+                    if err_dirs:
+                        st.error(err_dirs)
+                        continue
+
+                    props = geojson['features'][0]['properties']['summary']
+                    segments = geojson['features'][0]['properties'].get('segments', [])
+
+                    paradas_info = []
+                    for _, row_hoy in df_ruta_hoy.iterrows():
+                        paradas_info.append({
+                            "Día": row_hoy.get('Día',''), "Ruta": ruta_nombre,
+                            "Departamento": row_hoy.get('Departamento',''), "Lugar": row_hoy.get('Lugar',''),
+                            "Coordenadas": row_hoy.get('Coordenadas','')
+                        })
+
+                    datos_para_resumen.append({
+                        "id_unico": id_unico, "dia": dia, "ruta": ruta_nombre,
+                        "puntos": len(df_ruta_hoy), "dist_km": round(props['distance']/1000, 2),
+                        "drive_mins": round(props['duration']/60, 0), "color": color_actual,
+                        "paradas": paradas_info, "segmentos": segments
+                    })
+
+                    fg_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta_nombre} ({dia})")
+                    folium.GeoJson(geojson, style_function=lambda x, c=color_actual: {'color':c, 'weight':4, 'opacity':0.8}).add_to(fg_trazado)
+
+                    for i, (_, row_hoy) in enumerate(df_ruta_hoy.iterrows()):
+                        lat, lon = row_hoy['Coords_Procesadas'][1], row_hoy['Coords_Procesadas'][0]
+                        popup_txt = f"<b>{i+1}. {row_hoy.get('Lugar','')}</b><br>{row_hoy.get('Departamento','')}"
+                        icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{i+1}</div>"
+                        folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
+
+                    fg_trazado.add_to(mapa_calculado)
 
         folium.LayerControl(collapsed=True).add_to(mapa_calculado)
         st.session_state['mapa_guardado'] = mapa_calculado
