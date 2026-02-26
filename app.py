@@ -71,7 +71,7 @@ def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, most
         ).add_to(capa)
         capa.add_to(mapa)
 
-# --- CONEXIÓN PURA BLINDADA CONTRA CAÍDAS ---
+# --- CONEXIÓN PURA BLINDADA CONTRA CAÍDAS DE SERVIDOR ---
 def pedir_matriz_ors_con_reintento(body, headers):
     for intento in range(5): 
         try:
@@ -272,7 +272,7 @@ elif "Creación de rutas propias" in tipo_ruteo:
     st.sidebar.header("Configuración de Flota Automática")
     
     if "Patrón Fijo" in tipo_ruteo:
-        st.sidebar.info("🗓️ Modo Patrón Maestro: Selecciona el DÍA MÁS PESADO como base para extraer la flota mínima perfecta. Luego, simplemente inserta los puntos nuevos de los demás días sin abrir más vehículos.")
+        st.sidebar.info("🗓️ Modo Patrón Maestro: Analiza el DÍA MÁS PESADO para fijar la flota. Los puntos nuevos se inyectan en las rutas que tengan menos carga de tiempo, garantizando no violar las 14:30.")
     elif "Fijo" in tipo_ruteo:
         st.sidebar.info("🏢 Modo Fijo: Corta el mapa y calcula flota 100% independiente por departamento. NUNCA mezcla zonas en un auto.")
     elif "Flexible" in tipo_ruteo:
@@ -301,7 +301,7 @@ elif "Creación de rutas propias" in tipo_ruteo:
 
 # --- BOTÓN DE CÁLCULO ---
 if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
-    with st.spinner("Modo Ahorro Extremo: Optimizando al máximo para usar la menor cantidad de vehículos..."):
+    with st.spinner("Optimizando logística y equilibrando cargas sin exceder horarios..."):
         lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
         lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
         mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
@@ -386,6 +386,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                 
                                 search_parameters = pywrapcp.DefaultRoutingSearchParameters()
                                 search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                                search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
                                 search_parameters.time_limit.seconds = 5 
                                 
                                 solution = routing.SolveWithParameters(search_parameters)
@@ -730,22 +731,26 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         st.error(f"Error Matriz {dia} - {dept}: {err_matriz}")
 
         # ==========================================================
-        # LÓGICA 6, 7 Y 8: CREACIÓN DE RUTAS PROPIAS (PATRÓN MAESTRO - BASADO EN EL DÍA MÁS PESADO)
+        # LÓGICA 6, 7 Y 8: CREACIÓN DE RUTAS PROPIAS (PATRÓN MAESTRO - CON BALANCEO DE CARGA)
         # ==========================================================
         elif "Patrón Fijo" in tipo_ruteo:
             destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
 
-            # 1. LA LÓGICA GERENCIAL: Buscar el día que requirió más paradas para usarlo como Molde Perfecto
+            # 1. Buscar el DÍA BASE (El día con la mayor cantidad de puntos para establecer la flota pura)
             df_total_puntos = df_filtrado_dias[df_filtrado_dias['Lugar'] != punto_final_vrp].drop_duplicates(subset=['Lugar'])
             conteo_por_dia = df_filtrado_dias[df_filtrado_dias['Lugar'] != punto_final_vrp].groupby('Día').size()
             dia_base_global = conteo_por_dia.idxmax()
             
-            st.info(f"🧠 Generando Patrón Maestro: Usando el '{dia_base_global}' (el día con más entregas) como base para fijar la flota en su mínimo absoluto, y acoplando inteligentemente los puntos del resto de la semana.")
+            st.info(f"🧠 Patrón Maestro: Usando '{dia_base_global}' como molde para fijar 5 autos y balanceando inteligentemente los clientes extra para no superar el límite de las 14:30...")
 
             rutas_maestras_base = []
             vehiculo_real_count = 1
+            
+            # CÁLCULO DE CAPACIDAD DE TIEMPO (Para evitar saturación)
+            max_time_mins = max_time_sec / 60.0
+            max_stops_approx = max(1, int(max_time_mins / (min_parada_vrp + 7))) # Asume 7 mins promedio entre casas
 
-            # A) MODO PATRÓN FIJO DEPARTAMENTAL FIJO (CORTA EL MAPA)
+            # A) MODO PATRÓN FIJO DEPARTAMENTAL FIJO 
             if "Departamental Fijo" in tipo_ruteo:
                 dept_series = df_total_puntos['Departamento']
                 departamentos = [d for d in dept_series.unique() if pd.notna(d) and str(d).strip() != '']
@@ -753,7 +758,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                 for dept in departamentos:
                     df_dept_original = df_filtrado_dias[(df_filtrado_dias['Departamento'] == dept) & (df_filtrado_dias['Lugar'] != punto_final_vrp)]
                     if df_dept_original.empty: continue
-                    # Para este depto, buscamos su día más pesado
                     dia_base_dept = df_dept_original.groupby('Día').size().idxmax()
                     
                     df_base = df_dept_original[df_dept_original['Día'] == dia_base_dept].drop_duplicates(subset=['Lugar']).copy().reset_index(drop=True)
@@ -821,7 +825,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                                 rutas_dept_creadas.append({"nombre": r_name, "lugares": lugares, "color_idx": vehiculo_real_count-1})
                                 vehiculo_real_count += 1
                                 
-                    # 2. INYECCIÓN GEOGRÁFICA: Acoplamos los clientes de este departamento que NO estaban el día más pesado
+                    # 2. INYECCIÓN CON BALANCEO DE CARGA (Para no pasar las 14:30)
                     df_dept_all = df_total_puntos[df_total_puntos['Departamento'] == dept]
                     lugares_base = set(df_base['Lugar'].tolist())
                     lugares_dept_todos = df_dept_all['Lugar'].tolist()
@@ -834,17 +838,24 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                         
                         mejor_ruta_idx = -1
                         mejor_pos_idx = -1
-                        min_dist = float('inf')
+                        min_score = float('inf')
                         
                         for r_idx, ruta in enumerate(rutas_dept_creadas):
+                            cant_paradas = len(ruta['lugares'])
+                            factor_carga = 1.0 + (cant_paradas / max_stops_approx)
+                            if cant_paradas >= max_stops_approx:
+                                factor_carga *= 10.0 # Castigo para no saturar este auto
+                                
                             for pos_idx, lugar_ruta in enumerate(ruta['lugares']):
                                 if lugar_ruta == punto_final_vrp: continue
                                 match = df_total_puntos[df_total_puntos['Lugar'] == lugar_ruta]
                                 if not match.empty and match.iloc[0]['Coords_Procesadas'] is not None:
                                     coords_ruta = match.iloc[0]['Coords_Procesadas']
                                     dist = haversine((coords_faltante[1], coords_faltante[0]), (coords_ruta[1], coords_ruta[0]), unit=Unit.METERS)
-                                    if dist < min_dist:
-                                        min_dist = dist
+                                    score = dist * factor_carga
+                                    
+                                    if score < min_score:
+                                        min_score = score
                                         mejor_ruta_idx = r_idx
                                         mejor_pos_idx = pos_idx
                                         
@@ -859,7 +870,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
 
             # B) MODO PATRÓN (IDEAL LIBRE O DEPARTAMENTAL FLEXIBLE)
             else:
-                # Extraemos el día con más puntos de todo el Excel
                 df_base = df_filtrado_dias[(df_filtrado_dias['Día'] == dia_base_global) & (df_filtrado_dias['Lugar'] != punto_final_vrp)].drop_duplicates(subset=['Lugar']).copy().reset_index(drop=True)
                 df_base = pd.concat([df_base, destino_row.to_frame().T], ignore_index=True)
                 
@@ -933,7 +943,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                             rutas_creadas.append({"nombre": r_name, "lugares": lugares, "color_idx": vehiculo_real_count-1})
                             vehiculo_real_count += 1
                             
-                # 2. INYECCIÓN GEOGRÁFICA: Acoplamos los clientes que no estaban en el día de mayor carga
+                # 2. INYECCIÓN CON BALANCEO DE CARGA (Para no pasar las 14:30 en días extra)
                 lugares_base = set(df_base['Lugar'].tolist())
                 lugares_todos = df_total_puntos['Lugar'].tolist()
                 lugares_faltantes = [l for l in lugares_todos if l not in lugares_base]
@@ -945,17 +955,24 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     
                     mejor_ruta_idx = -1
                     mejor_pos_idx = -1
-                    min_dist = float('inf')
+                    min_score = float('inf')
                     
                     for r_idx, ruta in enumerate(rutas_creadas):
+                        cant_paradas = len(ruta['lugares'])
+                        factor_carga = 1.0 + (cant_paradas / max_stops_approx)
+                        if cant_paradas >= max_stops_approx:
+                            factor_carga *= 10.0 # Castigo para empujar el cliente a otra ruta más libre
+                            
                         for pos_idx, lugar_ruta in enumerate(ruta['lugares']):
                             if lugar_ruta == punto_final_vrp: continue
                             match = df_total_puntos[df_total_puntos['Lugar'] == lugar_ruta]
                             if not match.empty and match.iloc[0]['Coords_Procesadas'] is not None:
                                 coords_ruta = match.iloc[0]['Coords_Procesadas']
                                 dist = haversine((coords_faltante[1], coords_faltante[0]), (coords_ruta[1], coords_ruta[0]), unit=Unit.METERS)
-                                if dist < min_dist:
-                                    min_dist = dist
+                                score = dist * factor_carga
+                                
+                                if score < min_score:
+                                    min_score = score
                                     mejor_ruta_idx = r_idx
                                     mejor_pos_idx = pos_idx
                                     
@@ -969,7 +986,7 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                 rutas_maestras_base = rutas_creadas
 
             # --- 3. APLICAR EL PATRÓN A CADA DÍA ---
-            st.info("🗓️ Imprimiendo el Patrón Maestro en los días seleccionados. Las rutas mantendrán la estructura del día crítico (ej: 5 autos), simplemente saltando los clientes que no estén activos cada día.")
+            st.info("🗓️ Imprimiendo el Patrón Maestro en todos los días. Al saltar clientes sin pedido, el horario final bajará naturalmente.")
             for dia in dias_seleccionados:
                 df_dia = df[df['Día'] == dia].copy().reset_index(drop=True)
                 if punto_final_vrp not in df_dia['Lugar'].values:
@@ -982,7 +999,6 @@ if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
                     dibujar_geozona_circular(lista_coords_dia, f"🌍 DÍA: {dia}", "black", mapa_calculado)
 
                 for ruta_maestra in rutas_maestras_base:
-                    # Filtramos el Molde Maestro: Dejamos solo los clientes a visitar HOY.
                     lugares_hoy = [l for l in ruta_maestra['lugares'] if l in lugares_del_dia]
 
                     if len(lugares_hoy) < 2: continue 
