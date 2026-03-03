@@ -777,6 +777,7 @@ else:
                     
                     df_total_puntos = df_filtrado_dias[df_filtrado_dias['Lugar'] != punto_final_vrp].drop_duplicates(subset=['Lugar']).copy().reset_index(drop=True)
                     
+                    # MATRIZ ÚNICA MUNDIAL
                     df_master_global = pd.concat([df_total_puntos, destino_row.to_frame().T], ignore_index=True)
                     lista_coords_global = df_master_global['Coords_Procesadas'].tolist()
                     lugares_globales = df_master_global['Lugar'].tolist()
@@ -823,6 +824,7 @@ else:
                         subsets.append(("General", df_total_puntos['Lugar'].tolist()))
 
                     for subset_name, subset_lugares in subsets:
+                        # 1. EL FILTRO DE FRECUENCIA DEL USUARIO
                         df_subset_filtrado = df_filtrado_dias[df_filtrado_dias['Lugar'].isin(subset_lugares)]
                         dia_pico = df_subset_filtrado.groupby('Día').size().idxmax()
                         lugares_pico_base = df_subset_filtrado[df_subset_filtrado['Día'] == dia_pico]['Lugar'].unique().tolist()
@@ -913,7 +915,8 @@ else:
                                     for day in dias_activos:
                                         t_sim, d_sim = calcular_tiempo_ruta_en_dia_especifico(ruta_simulada, day)
                                         
-                                        # LA REGLA DE ORO (+10 MINUTOS MAX)
+                                        # LA REGLA DE ORO DE LOS +10 MINUTOS EXACTOS (600 SEGUNDOS)
+                                        # Ni un minuto más, ni un minuto menos. Si da 14:41, lo aborta.
                                         if t_sim > (max_time_sec + 600):
                                             es_valida = False
                                             break
@@ -929,6 +932,7 @@ else:
                             if best_r != -1:
                                 rutas_core_locs[best_r].insert(best_pos, f_loc)
                             else:
+                                # Si es físicamente imposible meterlo en los autos existentes con +10 min, abre auto nuevo.
                                 rutas_core_locs.append([f_loc])
                                 
                         for r in rutas_core_locs:
@@ -1090,10 +1094,12 @@ if st.session_state.get('calculo_terminado', False):
                 c3.metric("Total Estimado", f"{total_min:.0f} min")
                 
                 t_actual = datetime.datetime.combine(datetime.date.today(), h_inicio)
+                inicio_dt = t_actual
                 dist_acum = 0.0
                 mins_acum = 0.0
                 rows_excel = []
                 hora_llegada_final = "-"
+                llegada_final_dt = None
                 
                 for i, p in enumerate(d['paradas']):
                     dist_tramo = 0.0
@@ -1113,6 +1119,7 @@ if st.session_state.get('calculo_terminado', False):
                     llegada = t_actual
                     if es_ultimo:
                         hora_llegada_final = llegada.strftime("%H:%M")
+                        llegada_final_dt = llegada
                         
                     salida = llegada + datetime.timedelta(minutes=espera_real)
                     t_actual = salida
@@ -1135,12 +1142,17 @@ if st.session_state.get('calculo_terminado', False):
                 
                 data_global_detallada.extend(rows_excel)
                 
+                if llegada_final_dt:
+                    minutos_demora_real = int((llegada_final_dt - inicio_dt).total_seconds() / 60)
+                else:
+                    minutos_demora_real = 0
+                
                 data_resumen_general.append({
                     "Día": d['dia'],
                     "Ruta": d['ruta'],
                     "Hs de Inicio": h_inicio.strftime("%H:%M"),
                     "Hs de Finalización": hora_llegada_final,
-                    "Minutos de Demora": total_espera_calc,
+                    "Minutos de Demora": minutos_demora_real,
                     "Kms Recorridos": round(dist_acum, 2)
                 })
                 
