@@ -25,6 +25,15 @@ api_key = api_key_user if api_key_user else api_key_default
 if 'calculo_terminado' not in st.session_state:
     st.session_state['calculo_terminado'] = False
 
+# --- BARRA LATERAL: CARGA ---
+st.sidebar.markdown("---")
+st.sidebar.header("Carga de Datos")
+archivo_subido = st.sidebar.file_uploader("Sube tu archivo Excel", type=["xlsx", "xls"])
+
+if archivo_subido is None:
+    st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
+    st.stop()
+
 # --- FUNCIONES AUXILIARES ---
 def preparar_coordenadas(coord_str):
     try:
@@ -62,6 +71,7 @@ def dibujar_geozona_circular(coordenadas_lon_lat, nombre_capa, color, mapa, most
         ).add_to(capa)
         capa.add_to(mapa)
 
+# --- CONEXIÓN PURA BLINDADA CONTRA CAÍDAS ---
 def pedir_matriz_ors_con_reintento(body, headers):
     for intento in range(5): 
         try:
@@ -168,36 +178,106 @@ def obtener_trazado_masivo(coords_ordenadas, headers):
     }
     return fake_geojson, None
 
-# --- BARRA LATERAL: CARGA DE ARCHIVO ---
-st.sidebar.markdown("---")
-st.sidebar.header("Carga de Datos")
-archivo_subido = st.sidebar.file_uploader("Sube tu archivo Excel", type=["xlsx", "xls"])
+# --- PROCESAMIENTO INICIAL DEL DATAFRAME ---
+df = pd.read_excel(archivo_subido)
+df.columns = df.columns.str.strip() 
 
-# =====================================================================
-# BLOQUE DE SEGURIDAD ABSOLUTA: Nada se ejecuta si no hay archivo
-# =====================================================================
-if archivo_subido is None:
-    st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
+# -------------------------------------------------------------
+# IDENTIFICADOR INTELIGENTE DE ARCHIVO (NUEVA FUNCIÓN AÑADIDA)
+# -------------------------------------------------------------
+columnas_requeridas_cronograma = ['Orden', 'Día', 'Ruta', 'Departamento', 'Lugar', 'Coordenadas', 'Llegada', 'Salida', 'Minutos Tramo', 'Minutos Acumulados', 'Km Tramo', 'Km Acumulados']
+es_cronograma_descargado = all(col in df.columns for col in columnas_requeridas_cronograma)
+
+if 'Ruta' not in df.columns:
+    df['Ruta'] = "Sin Asignar"
+df['Ruta'] = df['Ruta'].fillna("Sin Asignar")
+
+df['Coords_Procesadas'] = df['Coordenadas'].apply(preparar_coordenadas)
+df = df.dropna(subset=['Coords_Procesadas']).copy()
+
+if df.empty:
+    st.error("❌ No se encontraron coordenadas válidas en el archivo.")
+    st.stop()
+
+# ======================================================================
+# FLUJO 1: ARCHIVO YA CALCULADO (MODO VISUALIZACIÓN)
+# ======================================================================
+if es_cronograma_descargado:
+    tipo_ruteo = "Visualización Descargada"
+    st.success("📄 ¡Cronograma Detallado detectado! Se ha evitado el menú de configuración.")
+    st.info("Presiona el botón para dibujar el recorrido exacto guardado en tu archivo Excel.")
+    
+    if st.button("🗺️ Mostrar Ruteo", type="primary", use_container_width=True):
+        with st.spinner("Dibujando rutas pre-calculadas..."):
+            df_valido = df.sort_values(by=['Día', 'Ruta', 'Orden'])
+            
+            lat_centro = df_valido.iloc[0]['Coords_Procesadas'][1]
+            lon_centro = df_valido.iloc[0]['Coords_Procesadas'][0]
+            mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
+            
+            colores = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'cadetblue', 'darkblue', 'pink', 'lightgreen']
+            datos_para_resumen = []
+            color_idx = 0
+            headers = {'Authorization': api_key, 'Content-Type': 'application/json'}
+            
+            grupos = df_valido.groupby(['Día', 'Ruta'], sort=False)
+            
+            for (dia, ruta), df_grupo in grupos:
+                id_unico = f"{dia} - {ruta}"
+                color_actual = colores[color_idx % len(colores)]
+                color_idx += 1
+                
+                coords_ordenadas = df_grupo['Coords_Procesadas'].tolist()
+                dibujar_geozona_circular(coords_ordenadas, f"🗺️ {ruta} ({dia})", color_actual, mapa_calculado)
+                
+                if len(coords_ordenadas) > 1:
+                    geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
+                    if err_dirs:
+                        st.error(f"Error trazando {ruta}: {err_dirs}")
+                        continue
+                        
+                    props = geojson['features'][0]['properties']['summary']
+                    segments = geojson['features'][0]['properties'].get('segments', [])
+                    
+                    paradas_info = []
+                    for _, row in df_grupo.iterrows():
+                        paradas_info.append({
+                            "Día": row.get('Día',''), "Ruta": row.get('Ruta',''),
+                            "Departamento": row.get('Departamento',''), "Lugar": row.get('Lugar',''),
+                            "Coordenadas": row.get('Coordenadas','')
+                        })
+                        
+                    datos_para_resumen.append({
+                        "id_unico": id_unico, "dia": dia, "ruta": ruta,
+                        "puntos": len(df_grupo), "dist_km": round(props['distance']/1000, 2),
+                        "drive_mins": round(props['duration']/60, 0), "color": color_actual,
+                        "paradas": paradas_info, "segmentos": segments
+                    })
+                    
+                    fg_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta} ({dia})")
+                    folium.GeoJson(geojson, style_function=lambda x, c=color_actual: {'color':c, 'weight':4, 'opacity':0.8}).add_to(fg_trazado)
+                    
+                    for i, (_, row) in enumerate(df_grupo.iterrows()):
+                        lat, lon = row['Coords_Procesadas'][1], row['Coords_Procesadas'][0]
+                        popup_txt = f"<b>{row.get('Orden','')}. {row.get('Lugar','')}</b><br>{row.get('Departamento','')}"
+                        icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{row.get('Orden','')}</div>"
+                        folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
+                    
+                    fg_trazado.add_to(mapa_calculado)
+
+            folium.LayerControl(collapsed=True).add_to(mapa_calculado)
+            st.session_state['mapa_guardado'] = mapa_calculado
+            st.session_state['datos_resumen'] = datos_para_resumen
+            st.session_state['calculo_terminado'] = True
+
+# ======================================================================
+# FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL TOTALMENTE INTACTA)
+# ======================================================================
 else:
-    # --- PROCESAMIENTO INICIAL DEL DATAFRAME ---
-    df = pd.read_excel(archivo_subido)
-    df.columns = df.columns.str.strip() 
-
     for col in ['Coordenadas', 'Día']:
         if col not in df.columns:
             st.error(f"❌ No se encontró la columna '{col}' en tu archivo Excel.")
             st.stop()
-
-    if 'Ruta' not in df.columns:
-        df['Ruta'] = "Sin Asignar"
-    df['Ruta'] = df['Ruta'].fillna("Sin Asignar")
-
-    df['Coords_Procesadas'] = df['Coordenadas'].apply(preparar_coordenadas)
-    df = df.dropna(subset=['Coords_Procesadas']).copy()
-
-    if df.empty:
-        st.error("❌ No se encontraron coordenadas válidas en el archivo.")
-        st.stop()
 
     # --- BARRA LATERAL: FILTROS DE DÍA ---
     st.sidebar.header("1. Filtro de Días")
@@ -218,6 +298,7 @@ else:
     st.sidebar.markdown("---")
     st.sidebar.header("2. Estrategia de Ruteo")
 
+    # LAS 8 OPCIONES DEFINITIVAS
     tipo_ruteo = st.sidebar.radio(
         "Selecciona cómo armar las rutas:",
         [
@@ -234,7 +315,7 @@ else:
 
     opciones_inicio_dict = {}
     opciones_fin_dict = {}
-    hora_salida_rutas_dict = {}
+    hora_salida_rutas_dict = {}  
     rutas_seleccionadas = []
 
     if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"]:
@@ -281,7 +362,7 @@ else:
         st.sidebar.header("Configuración de Flota Automática")
         
         if "Patrón Fijo" in tipo_ruteo:
-            st.sidebar.info("🗓️ Modo Patrón Maestro (Tu Lógica): Extrae los clientes esporádicos para asegurar una FLOTA MÍNIMA BASE. Luego inyecta esos puntos controlando el reloj para JAMÁS pasar de las 14:30 hs (+10 min de tolerancia estricta).")
+            st.sidebar.info("🗓️ Modo Patrón Maestro: Extrae los clientes esporádicos para asegurar una FLOTA MÍNIMA BASE (ej: 5 vehículos). Luego inyecta esos puntos controlando el reloj para JAMÁS pasar de las 14:30 hs (+10 min de tolerancia estricta).")
         elif "Fijo" in tipo_ruteo:
             st.sidebar.info("🏢 Modo Fijo: Corta el mapa y calcula flota 100% independiente por departamento. NUNCA mezcla zonas en un auto.")
         elif "Flexible" in tipo_ruteo:
@@ -992,130 +1073,139 @@ else:
             st.session_state['datos_resumen'] = datos_para_resumen
             st.session_state['calculo_terminado'] = True
 
-    # --- VISTA DE RESULTADOS CON PESTAÑAS ---
-    if st.session_state['calculo_terminado']:
+# --- VISTA DE RESULTADOS CON PESTAÑAS (COMÚN PARA TODOS LOS FLUJOS) ---
+if st.session_state['calculo_terminado']:
+    
+    tab_mapa, tab_cronogramas, tab_resumen = st.tabs([
+        "🗺️ Mapa Interactivo", 
+        "⏱️ Cronogramas Detallados", 
+        "📊 Resumen General"
+    ])
+    
+    with tab_mapa:
+        st_folium(st.session_state['mapa_guardado'], width=1000, height=650, returned_objects=[], key="map_fix")
+    
+    data_global_detallada = []
+    data_resumen_general = []
         
-        tab_mapa, tab_cronogramas, tab_resumen = st.tabs([
-            "🗺️ Mapa Interactivo", 
-            "⏱️ Cronogramas Detallados", 
-            "📊 Resumen General"
-        ])
-        
-        with tab_mapa:
-            st_folium(st.session_state['mapa_guardado'], width=1000, height=650, returned_objects=[], key="map_fix")
-        
-        data_global_detallada = []
-        data_resumen_general = []
-            
-        with tab_cronogramas:
-            for d in st.session_state['datos_resumen']:
-                with st.container():
-                    st.markdown(f"**📍 {d['dia']} | {d['ruta']}** ({d['puntos']} pts | {d['dist_km']} km)")
-                    
-                    c1, c2, c3 = st.columns([1.2, 1, 1])
-                    
-                    default_h = datetime.time(9,0)
-                    default_wait = 15
-                    if "Creación de rutas" in tipo_ruteo:
+    with tab_cronogramas:
+        for d in st.session_state['datos_resumen']:
+            with st.container():
+                st.markdown(f"**📍 {d['dia']} | {d['ruta']}** ({d['puntos']} pts | {d['dist_km']} km)")
+                
+                c1, c2, c3 = st.columns([1.2, 1, 1])
+                
+                default_h = datetime.time(9,0)
+                default_wait = 15
+                
+                # Respetar el horario manual o automático según la opción elegida
+                tipo_actual = st.session_state.get('tipo_ruteo', "Creación de rutas propias")
+                
+                if "Creación de rutas" in tipo_actual:
+                    # En modo creación automática asume las horas de la barra lateral general si están definidas
+                    try:
                         default_h = hora_salida_vrp
                         default_wait = min_parada_vrp
-                    else:
-                        dict_horas = st.session_state.get('hora_salida_rutas_dict', {})
-                        if d['id_unico'] in dict_horas:
-                            default_h = dict_horas[d['id_unico']]
-                    
-                    h_inicio = c1.time_input("Salida", default_h, key=f"h_{d['id_unico']}")
-                    espera = c2.number_input("Espera por parada (min)", 0, 300, default_wait, key=f"w_{d['id_unico']}")
-                    
-                    total_espera_calc = espera * (d['puntos'] - 1) if d['puntos'] > 0 else 0
-                    total_min = d['drive_mins'] + total_espera_calc
-                    c3.metric("Total Estimado", f"{total_min:.0f} min")
-                    
-                    t_actual = datetime.datetime.combine(datetime.date.today(), h_inicio)
-                    dist_acum = 0.0
-                    mins_acum = 0.0
-                    rows_excel = []
-                    hora_llegada_final = "-"
-                    
-                    for i, p in enumerate(d['paradas']):
-                        dist_tramo = 0.0
-                        mins_tramo = 0.0
-                        es_ultimo = (i == len(d['paradas']) - 1)
-                        espera_real = 0 if es_ultimo else espera
-                        
-                        if i > 0:
-                            secs = d['segmentos'][i-1]['duration'] if i-1 < len(d['segmentos']) else 0
-                            meters = d['segmentos'][i-1]['distance'] if i-1 < len(d['segmentos']) else 0
-                            dist_tramo = round(meters/1000, 2)
-                            mins_tramo = (secs / 60.0) + espera_real
-                            t_actual += datetime.timedelta(seconds=secs)
-                        else:
-                            mins_tramo = espera_real
-                        
-                        llegada = t_actual
-                        if es_ultimo:
-                            hora_llegada_final = llegada.strftime("%H:%M")
-                            
-                        salida = llegada + datetime.timedelta(minutes=espera_real)
-                        t_actual = salida
-                        
-                        dist_acum += dist_tramo
-                        mins_acum += mins_tramo
-                        
-                        rows_excel.append({
-                            "Orden": i+1,
-                            "Día": p['Día'], "Ruta": p['Ruta'],
-                            "Departamento": p['Departamento'], "Lugar": p['Lugar'],
-                            "Coordenadas": p['Coordenadas'],
-                            "Llegada": llegada.strftime("%H:%M"),
-                            "Salida": salida.strftime("%H:%M") if not es_ultimo else "-",
-                            "Minutos Tramo": round(mins_tramo, 0),
-                            "Minutos Acumulados": round(mins_acum, 0),
-                            "Km Tramo": dist_tramo,
-                            "Km Acumulados": round(dist_acum, 2)
-                        })
-                    
-                    data_global_detallada.extend(rows_excel)
-                    
-                    data_resumen_general.append({
-                        "Día": d['dia'],
-                        "Ruta": d['ruta'],
-                        "Hs de Inicio": h_inicio.strftime("%H:%M"),
-                        "Hs de Finalización": hora_llegada_final,
-                        "Minutos de Demora": total_espera_calc,
-                        "Kms Recorridos": round(dist_acum, 2)
-                    })
-                    
-                    with st.expander("Ver Cronograma Detallado"):
-                        df_view = pd.DataFrame(rows_excel)
-                        st.dataframe(df_view[['Orden','Lugar','Llegada','Salida','Minutos Tramo','Minutos Acumulados','Km Acumulados']], use_container_width=True)
-                        
-                        bio = io.BytesIO()
-                        with pd.ExcelWriter(bio, engine='openpyxl') as w:
-                            df_view.to_excel(w, index=False, sheet_name=limpiar_nombre_excel(d['id_unico']))
-                        st.download_button("📥 Descargar Excel de esta Ruta", bio.getvalue(), f"Ruta_{limpiar_nombre_excel(d['id_unico'])}.xlsx", key=f"dl_{d['id_unico']}")
-                    st.divider()
-
-        with tab_resumen:
-            st.markdown("### Tabla Resumen Operativo")
-            st.info("Este es el resumen general para auditar la eficiencia y horarios reales de finalización de todos los autos.")
-            
-            df_resumen = pd.DataFrame(data_resumen_general)
-            st.dataframe(df_resumen, use_container_width=True)
-            
-            bio_resumen = io.BytesIO()
-            with pd.ExcelWriter(bio_resumen, engine='openpyxl') as w:
-                df_resumen.to_excel(w, index=False, sheet_name="Resumen")
-            
-            col_btn1, col_btn2 = st.columns(2)
-            with col_btn1:
-                st.download_button("📥 DESCARGAR SOLO RESUMEN", bio_resumen.getvalue(), "Resumen_General.xlsx", type="secondary", use_container_width=True)
+                    except NameError:
+                        pass
+                else:
+                    # Si viene del Cronograma Descargado o de Rutas Manuales, intenta sacar la hora asignada
+                    dict_horas = st.session_state.get('hora_salida_rutas_dict', {})
+                    if d['id_unico'] in dict_horas:
+                        default_h = dict_horas[d['id_unico']]
                 
-            if data_global_detallada:
-                df_glob = pd.DataFrame(data_global_detallada)
-                bio_g = io.BytesIO()
-                with pd.ExcelWriter(bio_g, engine='openpyxl') as w:
-                    df_glob.to_excel(w, index=False, sheet_name="Cronograma Detallado")
-                    df_resumen.to_excel(w, index=False, sheet_name="Resumen General") 
-                with col_btn2:
-                    st.download_button("📥 DESCARGAR CRONOGRAMA MAESTRO (Completo)", bio_g.getvalue(), "Cronograma_Maestro.xlsx", type="primary", use_container_width=True)
+                h_inicio = c1.time_input("Salida", default_h, key=f"h_{d['id_unico']}")
+                espera = c2.number_input("Espera por parada (min)", 0, 300, default_wait, key=f"w_{d['id_unico']}")
+                
+                total_espera_calc = espera * (d['puntos'] - 1) if d['puntos'] > 0 else 0
+                total_min = d['drive_mins'] + total_espera_calc
+                c3.metric("Total Estimado", f"{total_min:.0f} min")
+                
+                t_actual = datetime.datetime.combine(datetime.date.today(), h_inicio)
+                dist_acum = 0.0
+                mins_acum = 0.0
+                rows_excel = []
+                hora_llegada_final = "-"
+                
+                for i, p in enumerate(d['paradas']):
+                    dist_tramo = 0.0
+                    mins_tramo = 0.0
+                    es_ultimo = (i == len(d['paradas']) - 1)
+                    espera_real = 0 if es_ultimo else espera
+                    
+                    if i > 0:
+                        secs = d['segmentos'][i-1]['duration'] if i-1 < len(d['segmentos']) else 0
+                        meters = d['segmentos'][i-1]['distance'] if i-1 < len(d['segmentos']) else 0
+                        dist_tramo = round(meters/1000, 2)
+                        mins_tramo = (secs / 60.0) + espera_real
+                        t_actual += datetime.timedelta(seconds=secs)
+                    else:
+                        mins_tramo = espera_real
+                    
+                    llegada = t_actual
+                    if es_ultimo:
+                        hora_llegada_final = llegada.strftime("%H:%M")
+                        
+                    salida = llegada + datetime.timedelta(minutes=espera_real)
+                    t_actual = salida
+                    
+                    dist_acum += dist_tramo
+                    mins_acum += mins_tramo
+                    
+                    rows_excel.append({
+                        "Orden": p.get('Orden', i+1),
+                        "Día": p['Día'], "Ruta": p['Ruta'],
+                        "Departamento": p['Departamento'], "Lugar": p['Lugar'],
+                        "Coordenadas": p['Coordenadas'],
+                        "Llegada": llegada.strftime("%H:%M"),
+                        "Salida": salida.strftime("%H:%M") if not es_ultimo else "-",
+                        "Minutos Tramo": round(mins_tramo, 0),
+                        "Minutos Acumulados": round(mins_acum, 0),
+                        "Km Tramo": dist_tramo,
+                        "Km Acumulados": round(dist_acum, 2)
+                    })
+                
+                data_global_detallada.extend(rows_excel)
+                
+                data_resumen_general.append({
+                    "Día": d['dia'],
+                    "Ruta": d['ruta'],
+                    "Hs de Inicio": h_inicio.strftime("%H:%M"),
+                    "Hs de Finalización": hora_llegada_final,
+                    "Minutos de Demora": total_espera_calc,
+                    "Kms Recorridos": round(dist_acum, 2)
+                })
+                
+                with st.expander("Ver Cronograma Detallado"):
+                    df_view = pd.DataFrame(rows_excel)
+                    st.dataframe(df_view[['Orden','Lugar','Llegada','Salida','Minutos Tramo','Minutos Acumulados','Km Acumulados']], use_container_width=True)
+                    
+                    bio = io.BytesIO()
+                    with pd.ExcelWriter(bio, engine='openpyxl') as w:
+                        df_view.to_excel(w, index=False, sheet_name=limpiar_nombre_excel(d['id_unico']))
+                    st.download_button("📥 Descargar Excel de esta Ruta", bio.getvalue(), f"Ruta_{limpiar_nombre_excel(d['id_unico'])}.xlsx", key=f"dl_{d['id_unico']}")
+                st.divider()
+
+    with tab_resumen:
+        st.markdown("### Tabla Resumen Operativo")
+        st.info("Este es el resumen general para auditar la eficiencia y horarios reales de finalización de todos los autos.")
+        
+        df_resumen = pd.DataFrame(data_resumen_general)
+        st.dataframe(df_resumen, use_container_width=True)
+        
+        bio_resumen = io.BytesIO()
+        with pd.ExcelWriter(bio_resumen, engine='openpyxl') as w:
+            df_resumen.to_excel(w, index=False, sheet_name="Resumen")
+        
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            st.download_button("📥 DESCARGAR SOLO RESUMEN", bio_resumen.getvalue(), "Resumen_General.xlsx", type="secondary", use_container_width=True)
+            
+        if data_global_detallada:
+            df_glob = pd.DataFrame(data_global_detallada)
+            bio_g = io.BytesIO()
+            with pd.ExcelWriter(bio_g, engine='openpyxl') as w:
+                df_glob.to_excel(w, index=False, sheet_name="Cronograma Detallado")
+                df_resumen.to_excel(w, index=False, sheet_name="Resumen General") 
+            with col_btn2:
+                st.download_button("📥 DESCARGAR CRONOGRAMA MAESTRO (Completo)", bio_g.getvalue(), "Cronograma_Maestro.xlsx", type="primary", use_container_width=True)
