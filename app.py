@@ -299,10 +299,7 @@ else:
                         fg_trazado.add_to(mapa_calculado)
 
                 folium.LayerControl(collapsed=True).add_to(mapa_calculado)
-                
-                # --- INYECCIÓN DE LOS BOTONES DE APAGADO/PRENDIDO DE CAPAS ---
                 mapa_calculado.get_root().html.add_child(folium.Element(js_toggle_capas))
-                
                 st.session_state['mapa_guardado'] = mapa_calculado
                 st.session_state['datos_resumen'] = datos_para_resumen
                 st.session_state['calculo_terminado'] = True
@@ -311,11 +308,6 @@ else:
     # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL TOTALMENTE INTACTA)
     # ======================================================================
     else:
-        for col in ['Coordenadas', 'Día']:
-            if col not in df.columns:
-                st.error(f"❌ No se encontró la columna '{col}' en tu archivo Excel.")
-                st.stop()
-
         # --- BARRA LATERAL: FILTROS DE DÍA ---
         st.sidebar.header("1. Filtro de Días")
         dias_disponibles = df['Día'].unique().tolist()
@@ -715,8 +707,8 @@ else:
                                         st.error(f"Error en trazado: {err_dirs}")
                             else:
                                 st.error(f"❌ Imposible matemático en el {dia}.")
-                    else:
-                        st.error(f"Error Matriz {dia}: {err_matriz}")
+                        else:
+                            st.error(f"Error Matriz {dia}: {err_matriz}")
 
                 # ==========================================================
                 # LÓGICA 5: CREACIÓN DE RUTAS PROPIAS (DEPARTAMENTAL FIJO - NORMAL)
@@ -859,182 +851,182 @@ else:
                             else:
                                 st.error(f"Error Matriz {dia} - {dept}: {err_matriz}")
 
-            # ==========================================================
-            # LÓGICA 6, 7 Y 8: CREACIÓN DE RUTAS PROPIAS (PATRÓN MAESTRO - CON LÍMITE ESTRICTO DE +10 MIN)
-            # ==========================================================
-            elif "Patrón Fijo" in tipo_ruteo:
-                destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
+                # ==========================================================
+                # LÓGICA 6, 7 Y 8: CREACIÓN DE RUTAS PROPIAS (PATRÓN MAESTRO - CON LÍMITE ESTRICTO DE +10 MIN)
+                # ==========================================================
+                elif "Patrón Fijo" in tipo_ruteo:
+                    destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
 
-                st.info("🧠 Generando Patrón Maestro: Extrayendo los clientes esporádicos para garantizar la FLOTA MÍNIMA. Los sobrantes se inyectarán con límite matemático ESTRICTO de +10 minutos.")
-                
-                df_total_puntos = df_filtrado_dias[df_filtrado_dias['Lugar'] != punto_final_vrp].drop_duplicates(subset=['Lugar']).copy().reset_index(drop=True)
-                
-                # MATRIZ ÚNICA MUNDIAL
-                df_master_global = pd.concat([df_total_puntos, destino_row.to_frame().T], ignore_index=True)
-                lista_coords_global = df_master_global['Coords_Procesadas'].tolist()
-                lugares_globales = df_master_global['Lugar'].tolist()
-                end_idx_global = len(lugares_globales) - 1
-
-                matriz_dist_global, matriz_dur_global, err_matriz_glob = obtener_matriz_masiva(lista_coords_global, headers)
-                if err_matriz_glob: st.error(err_matriz_glob); st.stop()
-                
-                # LIMPIEZA MATEMÁTICA A ENTEROS
-                for i in range(len(matriz_dist_global)):
-                    for j in range(len(matriz_dist_global[0])):
-                        if matriz_dist_global[i][j] is None: matriz_dist_global[i][j] = 99999999
-                        else: matriz_dist_global[i][j] = int(matriz_dist_global[i][j])
-                        if matriz_dur_global[i][j] is None: matriz_dur_global[i][j] = 99999999
-                        else: matriz_dur_global[i][j] = int(matriz_dur_global[i][j])
-
-                def calcular_tiempo_ruta_en_dia_especifico(ruta_locs, day):
-                    locs_day = set(df_filtrado_dias[df_filtrado_dias['Día'] == day]['Lugar'])
-                    r_day = [l for l in ruta_locs if l in locs_day]
-                    if not r_day: return 0, 0
+                    st.info("🧠 Generando Patrón Maestro: Extrayendo los clientes esporádicos para garantizar la FLOTA MÍNIMA. Los sobrantes se inyectarán con límite matemático ESTRICTO de +10 minutos.")
                     
-                    t = 0
-                    d = 0
-                    for i in range(len(r_day) - 1):
-                        idx_A = lugares_globales.index(r_day[i])
-                        idx_B = lugares_globales.index(r_day[i+1])
-                        t += int(min_parada_vrp * 60) + matriz_dur_global[idx_A][idx_B]
-                        d += matriz_dist_global[idx_A][idx_B]
+                    df_total_puntos = df_filtrado_dias[df_filtrado_dias['Lugar'] != punto_final_vrp].drop_duplicates(subset=['Lugar']).copy().reset_index(drop=True)
+                    
+                    # MATRIZ ÚNICA MUNDIAL
+                    df_master_global = pd.concat([df_total_puntos, destino_row.to_frame().T], ignore_index=True)
+                    lista_coords_global = df_master_global['Coords_Procesadas'].tolist()
+                    lugares_globales = df_master_global['Lugar'].tolist()
+                    end_idx_global = len(lugares_globales) - 1
+
+                    matriz_dist_global, matriz_dur_global, err_matriz_glob = obtener_matriz_masiva(lista_coords_global, headers)
+                    if err_matriz_glob: st.error(err_matriz_glob); st.stop()
+                    
+                    # LIMPIEZA MATEMÁTICA A ENTEROS
+                    for i in range(len(matriz_dist_global)):
+                        for j in range(len(matriz_dist_global[0])):
+                            if matriz_dist_global[i][j] is None: matriz_dist_global[i][j] = 99999999
+                            else: matriz_dist_global[i][j] = int(matriz_dist_global[i][j])
+                            if matriz_dur_global[i][j] is None: matriz_dur_global[i][j] = 99999999
+                            else: matriz_dur_global[i][j] = int(matriz_dur_global[i][j])
+
+                    def calcular_tiempo_ruta_en_dia_especifico(ruta_locs, day):
+                        locs_day = set(df_filtrado_dias[df_filtrado_dias['Día'] == day]['Lugar'])
+                        r_day = [l for l in ruta_locs if l in locs_day]
+                        if not r_day: return 0, 0
                         
-                    idx_last = lugares_globales.index(r_day[-1])
-                    t += int(min_parada_vrp * 60) + matriz_dur_global[idx_last][end_idx_global]
-                    d += matriz_dist_global[idx_last][end_idx_global]
-                    return t, d
+                        t = 0
+                        d = 0
+                        for i in range(len(r_day) - 1):
+                            idx_A = lugares_globales.index(r_day[i])
+                            idx_B = lugares_globales.index(r_day[i+1])
+                            t += int(min_parada_vrp * 60) + matriz_dur_global[idx_A][idx_B]
+                            d += matriz_dist_global[idx_A][idx_B]
+                            
+                        idx_last = lugares_globales.index(r_day[-1])
+                        t += int(min_parada_vrp * 60) + matriz_dur_global[idx_last][end_idx_global]
+                        d += matriz_dist_global[idx_last][end_idx_global]
+                        return t, d
 
-                rutas_maestras_base = []
-                vehiculo_real_count = 1
+                    rutas_maestras_base = []
+                    vehiculo_real_count = 1
 
-                subsets = []
-                if "Departamental Fijo" in tipo_ruteo:
-                    departamentos = [d for d in df_total_puntos['Departamento'].unique() if pd.notna(d) and str(d).strip() != '']
-                    for dept in departamentos:
-                        subsets.append((dept, df_total_puntos[df_total_puntos['Departamento'] == dept]['Lugar'].tolist()))
-                else:
-                    subsets.append(("General", df_total_puntos['Lugar'].tolist()))
-
-                for subset_name, subset_lugares in subsets:
-                    # 1. EL FILTRO DE FRECUENCIA DEL USUARIO
-                    df_subset_filtrado = df_filtrado_dias[df_filtrado_dias['Lugar'].isin(subset_lugares)]
-                    dia_pico = df_subset_filtrado.groupby('Día').size().idxmax()
-                    lugares_pico_base = df_subset_filtrado[df_subset_filtrado['Día'] == dia_pico]['Lugar'].unique().tolist()
-                    
-                    pico_indices = [lugares_globales.index(l) for l in lugares_pico_base]
-                    num_sub = len(pico_indices)
-                    dummy_idx = num_sub
-                    end_idx_sub = num_sub + 1
-                    
-                    rutas_core_locs = []
-                    
-                    if num_sub < 2:
-                        if num_sub == 1: rutas_core_locs.append([lugares_pico_base[0]])
+                    subsets = []
+                    if "Departamental Fijo" in tipo_ruteo:
+                        departamentos = [d for d in df_total_puntos['Departamento'].unique() if pd.notna(d) and str(d).strip() != '']
+                        for dept in departamentos:
+                            subsets.append((dept, df_total_puntos[df_total_puntos['Departamento'] == dept]['Lugar'].tolist()))
                     else:
-                        sub_dist = [[0]*(num_sub+2) for _ in range(num_sub+2)]
-                        sub_dur = [[0]*(num_sub+2) for _ in range(num_sub+2)]
-                        for i in range(num_sub):
-                            for j in range(num_sub):
-                                sub_dist[i][j] = int(matriz_dist_global[pico_indices[i]][pico_indices[j]])
-                                sub_dur[i][j] = int(matriz_dur_global[pico_indices[i]][pico_indices[j]])
-                            sub_dist[i][end_idx_sub] = int(matriz_dist_global[pico_indices[i]][end_idx_global])
-                            sub_dur[i][end_idx_sub] = int(matriz_dur_global[pico_indices[i]][end_idx_global])
-                            
-                        manager = pywrapcp.RoutingIndexManager(num_sub + 2, num_sub, [dummy_idx]*num_sub, [end_idx_sub]*num_sub)
-                        routing = pywrapcp.RoutingModel(manager)
+                        subsets.append(("General", df_total_puntos['Lugar'].tolist()))
+
+                    for subset_name, subset_lugares in subsets:
+                        # 1. EL FILTRO DE FRECUENCIA DEL USUARIO
+                        df_subset_filtrado = df_filtrado_dias[df_filtrado_dias['Lugar'].isin(subset_lugares)]
+                        dia_pico = df_subset_filtrado.groupby('Día').size().idxmax()
+                        lugares_pico_base = df_subset_filtrado[df_subset_filtrado['Día'] == dia_pico]['Lugar'].unique().tolist()
                         
-                        def d_call(f, t):
-                            fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
-                            dist = int(sub_dist[fn][tn])
-                            if fn == dummy_idx and tn != end_idx_sub: return dist + 100000000 
-                            
-                            if "Flexible" in tipo_ruteo and fn < num_sub and tn < num_sub:
-                                g_fn, g_tn = pico_indices[fn], pico_indices[tn]
-                                d_f = str(df_master_global.iloc[g_fn].get('Departamento','')).strip().lower()
-                                d_t = str(df_master_global.iloc[g_tn].get('Departamento','')).strip().lower()
-                                if d_f and d_t and d_f != d_t: dist += 500000
-                            return dist
-                            
-                        def t_call(f, t):
-                            fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
-                            wt = int(min_parada_vrp*60) if tn != dummy_idx and tn != end_idx_sub else 0
-                            return int(sub_dur[fn][tn]) + wt
-                            
-                        transit_cb = routing.RegisterTransitCallback(d_call)
-                        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-                        time_cb = routing.RegisterTransitCallback(t_call)
+                        pico_indices = [lugares_globales.index(l) for l in lugares_pico_base]
+                        num_sub = len(pico_indices)
+                        dummy_idx = num_sub
+                        end_idx_sub = num_sub + 1
                         
-                        routing.AddDimension(time_cb, 0, max_time_sec, True, "Time")
-                        routing.SetFixedCostOfAllVehicles(100000000) 
+                        rutas_core_locs = []
                         
-                        search_params = pywrapcp.DefaultRoutingSearchParameters()
-                        search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
-                        search_params.time_limit.seconds = 10
-                        
-                        sol = routing.SolveWithParameters(search_params)
-                        if sol:
-                            for vid in range(num_sub):
-                                idx = routing.Start(vid)
-                                fv = sol.Value(routing.NextVar(idx))
-                                if manager.IndexToNode(fv) == end_idx_sub: continue
-                                
-                                r = []
-                                while not routing.IsEnd(idx):
-                                    n = manager.IndexToNode(idx)
-                                    if n != dummy_idx: r.append(lugares_pico_base[n])
-                                    idx = sol.Value(routing.NextVar(idx))
-                                rutas_core_locs.append(r)
-                                
-                    # 2. INYECCIÓN CON RELOJ ESTRICTO (+10 MIN EXACTOS): 
-                    lugares_faltantes = [l for l in subset_lugares if l not in lugares_pico_base]
-                    
-                    for f_loc in lugares_faltantes:
-                        dias_activos = df_subset_filtrado[df_subset_filtrado['Lugar'] == f_loc]['Día'].unique()
-                        f_idx = lugares_globales.index(f_loc)
-                        
-                        best_r = -1
-                        best_pos = -1
-                        min_extra_dist = float('inf')
-                        
-                        for r_idx, ruta in enumerate(rutas_core_locs):
-                            for pos in range(len(ruta) + 1):
-                                ruta_simulada = list(ruta)
-                                ruta_simulada.insert(pos, f_loc)
-                                
-                                es_valida = True
-                                dist_extra_total = 0
-                                
-                                for day in dias_activos:
-                                    t_sim, d_sim = calcular_tiempo_ruta_en_dia_especifico(ruta_simulada, day)
-                                    
-                                    # LA REGLA DE ORO DE LOS +10 MINUTOS EXACTOS (600 SEGUNDOS)
-                                    # Ni un minuto más, ni un minuto menos. Si da 14:41, lo aborta.
-                                    if t_sim > (max_time_sec + 600):
-                                        es_valida = False
-                                        break
-                                    
-                                    _, d_orig = calcular_tiempo_ruta_en_dia_especifico(ruta, day)
-                                    dist_extra_total += (d_sim - d_orig)
-                                    
-                                if es_valida and dist_extra_total < min_extra_dist:
-                                    min_extra_dist = dist_extra_total
-                                    best_r = r_idx
-                                    best_pos = pos
-                                    
-                        if best_r != -1:
-                            rutas_core_locs[best_r].insert(best_pos, f_loc)
+                        if num_sub < 2:
+                            if num_sub == 1: rutas_core_locs.append([lugares_pico_base[0]])
                         else:
-                            # Si es físicamente imposible meterlo en los autos existentes con +10 min, abre auto nuevo.
-                            rutas_core_locs.append([f_loc])
+                            sub_dist = [[0]*(num_sub+2) for _ in range(num_sub+2)]
+                            sub_dur = [[0]*(num_sub+2) for _ in range(num_sub+2)]
+                            for i in range(num_sub):
+                                for j in range(num_sub):
+                                    sub_dist[i][j] = int(matriz_dist_global[pico_indices[i]][pico_indices[j]])
+                                    sub_dur[i][j] = int(matriz_dur_global[pico_indices[i]][pico_indices[j]])
+                                sub_dist[i][end_idx_sub] = int(matriz_dist_global[pico_indices[i]][end_idx_global])
+                                sub_dur[i][end_idx_sub] = int(matriz_dur_global[pico_indices[i]][end_idx_global])
+                                
+                            manager = pywrapcp.RoutingIndexManager(num_sub + 2, num_sub, [dummy_idx]*num_sub, [end_idx_sub]*num_sub)
+                            routing = pywrapcp.RoutingModel(manager)
                             
-                    for r in rutas_core_locs:
-                        name_suffix = f" ({str(subset_name).strip()})" if subset_name != "General" else ""
-                        rutas_maestras_base.append({
-                            "nombre": f"Auto {vehiculo_real_count}{name_suffix}",
-                            "lugares": r,
-                            "color_idx": vehiculo_real_count-1
-                        })
-                        vehiculo_real_count += 1
+                            def d_call(f, t):
+                                fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
+                                dist = int(sub_dist[fn][tn])
+                                if fn == dummy_idx and tn != end_idx_sub: return dist + 100000000 
+                                
+                                if "Flexible" in tipo_ruteo and fn < num_sub and tn < num_sub:
+                                    g_fn, g_tn = pico_indices[fn], pico_indices[tn]
+                                    d_f = str(df_master_global.iloc[g_fn].get('Departamento','')).strip().lower()
+                                    d_t = str(df_master_global.iloc[g_tn].get('Departamento','')).strip().lower()
+                                    if d_f and d_t and d_f != d_t: dist += 500000
+                                return dist
+                                
+                            def t_call(f, t):
+                                fn, tn = manager.IndexToNode(f), manager.IndexToNode(t)
+                                wt = int(min_parada_vrp*60) if tn != dummy_idx and tn != end_idx_sub else 0
+                                return int(sub_dur[fn][tn]) + wt
+                                
+                            transit_cb = routing.RegisterTransitCallback(d_call)
+                            routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+                            time_cb = routing.RegisterTransitCallback(t_call)
+                            
+                            routing.AddDimension(time_cb, 0, max_time_sec, True, "Time")
+                            routing.SetFixedCostOfAllVehicles(100000000) 
+                            
+                            search_params = pywrapcp.DefaultRoutingSearchParameters()
+                            search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                            search_params.time_limit.seconds = 10
+                            
+                            sol = routing.SolveWithParameters(search_params)
+                            if sol:
+                                for vid in range(num_sub):
+                                    idx = routing.Start(vid)
+                                    fv = sol.Value(routing.NextVar(idx))
+                                    if manager.IndexToNode(fv) == end_idx_sub: continue
+                                    
+                                    r = []
+                                    while not routing.IsEnd(idx):
+                                        n = manager.IndexToNode(idx)
+                                        if n != dummy_idx: r.append(lugares_pico_base[n])
+                                        idx = sol.Value(routing.NextVar(idx))
+                                    rutas_core_locs.append(r)
+                                    
+                        # 2. INYECCIÓN CON RELOJ ESTRICTO (+10 MIN EXACTOS): 
+                        lugares_faltantes = [l for l in subset_lugares if l not in lugares_pico_base]
+                        
+                        for f_loc in lugares_faltantes:
+                            dias_activos = df_subset_filtrado[df_subset_filtrado['Lugar'] == f_loc]['Día'].unique()
+                            f_idx = lugares_globales.index(f_loc)
+                            
+                            best_r = -1
+                            best_pos = -1
+                            min_extra_dist = float('inf')
+                            
+                            for r_idx, ruta in enumerate(rutas_core_locs):
+                                for pos in range(len(ruta) + 1):
+                                    ruta_simulada = list(ruta)
+                                    ruta_simulada.insert(pos, f_loc)
+                                    
+                                    es_valida = True
+                                    dist_extra_total = 0
+                                    
+                                    for day in dias_activos:
+                                        t_sim, d_sim = calcular_tiempo_ruta_en_dia_especifico(ruta_simulada, day)
+                                        
+                                        # LA REGLA DE ORO DE LOS +10 MINUTOS EXACTOS (600 SEGUNDOS)
+                                        # Ni un minuto más, ni un minuto menos. Si da 14:41, lo aborta.
+                                        if t_sim > (max_time_sec + 600):
+                                            es_valida = False
+                                            break
+                                        
+                                        _, d_orig = calcular_tiempo_ruta_en_dia_especifico(ruta, day)
+                                        dist_extra_total += (d_sim - d_orig)
+                                        
+                                    if es_valida and dist_extra_total < min_extra_dist:
+                                        min_extra_dist = dist_extra_total
+                                        best_r = r_idx
+                                        best_pos = pos
+                                        
+                            if best_r != -1:
+                                rutas_core_locs[best_r].insert(best_pos, f_loc)
+                            else:
+                                # Si es físicamente imposible meterlo en los autos existentes con +10 min, abre auto nuevo.
+                                rutas_core_locs.append([f_loc])
+                                
+                        for r in rutas_core_locs:
+                            name_suffix = f" ({str(subset_name).strip()})" if subset_name != "General" else ""
+                            rutas_maestras_base.append({
+                                "nombre": f"Auto {vehiculo_real_count}{name_suffix}",
+                                "lugares": r,
+                                "color_idx": vehiculo_real_count-1
+                            })
+                            vehiculo_real_count += 1
 
                 # --- 4. APLICAR EL PATRÓN A CADA DÍA ---
                 st.info("🗓️ Imprimiendo el Patrón Maestro final. Como la IA simuló el reloj estricto en la inyección (Max +10 min), mantenemos la flota mínima sin desfasar los horarios.")
