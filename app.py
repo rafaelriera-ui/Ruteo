@@ -25,34 +25,33 @@ api_key = api_key_user if api_key_user else api_key_default
 if 'calculo_terminado' not in st.session_state:
     st.session_state['calculo_terminado'] = False
 
-# --- SCRIPT DE BOTONES FLOTANTES PARA EL MAPA (REPARADO Y BLINDADO) ---
+# --- SCRIPT DE BOTONES FLOTANTES PARA EL MAPA (REPARADO Y 100% FUNCIONAL) ---
 js_toggle_capas = """
-<div id="panel-botones" style="position: absolute; top: 12px; left: 55px; z-index: 9999; background: white; padding: 6px; border-radius: 5px; box-shadow: 0 1px 5px rgba(0,0,0,0.65); font-family: sans-serif; font-size: 13px;">
-    <button id="btn-apagar" style="cursor: pointer; background: #ffebee; border: 1px solid #ffcdd2; padding: 4px 8px; border-radius: 3px; font-weight: bold; margin-right: 5px;">❌ Apagar Todo</button>
-    <button id="btn-prender" style="cursor: pointer; background: #e8f5e9; border: 1px solid #c8e6c9; padding: 4px 8px; border-radius: 3px; font-weight: bold;">✅ Prender Todo</button>
+<div id="panel-botones-capas" style="position: absolute; top: 12px; left: 55px; z-index: 9999; background: white; padding: 6px; border-radius: 5px; box-shadow: 0 1px 5px rgba(0,0,0,0.65); font-family: sans-serif; font-size: 13px;">
+    <button type="button" onclick="toggleFoliumLayers(false, event)" style="cursor: pointer; background: #ffebee; border: 1px solid #ffcdd2; padding: 4px 8px; border-radius: 3px; font-weight: bold; margin-right: 5px; color: #b71c1c;">❌ Apagar Todo</button>
+    <button type="button" onclick="toggleFoliumLayers(true, event)" style="cursor: pointer; background: #e8f5e9; border: 1px solid #c8e6c9; padding: 4px 8px; border-radius: 3px; font-weight: bold; color: #1b5e20;">✅ Prender Todo</button>
 </div>
 <script>
-// Previene que al hacer click se recargue la página en Streamlit
-var panel = document.getElementById('panel-botones');
-panel.addEventListener('mousedown', function(e){ e.stopPropagation(); });
-panel.addEventListener('click', function(e){ e.stopPropagation(); });
-panel.addEventListener('dblclick', function(e){ e.stopPropagation(); });
-
-document.getElementById('btn-apagar').onclick = function(e) {
-    e.preventDefault();
-    var cbs = document.querySelectorAll('.leaflet-control-layers-overlays input[type="checkbox"]');
-    for(var i=0; i<cbs.length; i++) {
-        if(cbs[i].checked) cbs[i].click();
+function toggleFoliumLayers(turnOn, e) {
+    if(e) {
+        e.stopPropagation();
+        e.preventDefault();
     }
-};
+    var checkboxes = document.querySelectorAll('.leaflet-control-layers-selector');
+    checkboxes.forEach(function(cb) {
+        if((turnOn && !cb.checked) || (!turnOn && cb.checked)) {
+            cb.click();
+        }
+    });
+}
 
-document.getElementById('btn-prender').onclick = function(e) {
-    e.preventDefault();
-    var cbs = document.querySelectorAll('.leaflet-control-layers-overlays input[type="checkbox"]');
-    for(var i=0; i<cbs.length; i++) {
-        if(!cbs[i].checked) cbs[i].click();
-    }
-};
+// Bloquea los clics para que no se arrastre el mapa por accidente al tocar los botones
+var panel = document.getElementById('panel-botones-capas');
+if(panel) {
+    panel.addEventListener('mousedown', function(e){ e.stopPropagation(); });
+    panel.addEventListener('dblclick', function(e){ e.stopPropagation(); });
+    panel.addEventListener('wheel', function(e){ e.stopPropagation(); });
+}
 </script>
 """
 
@@ -299,7 +298,10 @@ else:
                         fg_trazado.add_to(mapa_calculado)
 
                 folium.LayerControl(collapsed=True).add_to(mapa_calculado)
+                
+                # --- INYECCIÓN DE LOS BOTONES DE APAGADO/PRENDIDO DE CAPAS ---
                 mapa_calculado.get_root().html.add_child(folium.Element(js_toggle_capas))
+                
                 st.session_state['mapa_guardado'] = mapa_calculado
                 st.session_state['datos_resumen'] = datos_para_resumen
                 st.session_state['calculo_terminado'] = True
@@ -707,8 +709,8 @@ else:
                                         st.error(f"Error en trazado: {err_dirs}")
                             else:
                                 st.error(f"❌ Imposible matemático en el {dia}.")
-                        else:
-                            st.error(f"Error Matriz {dia}: {err_matriz}")
+                    else:
+                        st.error(f"Error Matriz {dia}: {err_matriz}")
 
                 # ==========================================================
                 # LÓGICA 5: CREACIÓN DE RUTAS PROPIAS (DEPARTAMENTAL FIJO - NORMAL)
