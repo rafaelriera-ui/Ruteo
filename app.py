@@ -260,11 +260,6 @@ else:
     # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL TOTALMENTE INTACTA)
     # ======================================================================
     else:
-        for col in ['Coordenadas', 'Día']:
-            if col not in df.columns:
-                st.error(f"❌ No se encontró la columna '{col}' en tu archivo Excel.")
-                st.stop()
-
         st.sidebar.header("1. Filtro de Días")
         dias_disponibles = df['Día'].unique().tolist()
         todos_dias = st.sidebar.checkbox("✔️ Todos los Días", value=True)
@@ -1146,6 +1141,21 @@ if st.session_state.get('calculo_terminado', False):
                     minutos_demora_real = int((llegada_final_dt - inicio_dt).total_seconds() / 60)
                 else:
                     minutos_demora_real = 0
+                    
+                # CONSTRUCCIÓN DEL ENLACE DE GOOGLE MAPS
+                waypoints = []
+                for p in d['paradas']:
+                    coord_raw = str(p.get('Coordenadas', ''))
+                    partes = coord_raw.split(',')
+                    if len(partes) >= 2:
+                        try:
+                            lat = float(partes[0].strip())
+                            lon = float(partes[1].strip())
+                            waypoints.append(f"{lat},{lon}")
+                        except Exception:
+                            pass
+                
+                enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints) if waypoints else ""
                 
                 data_resumen_general.append({
                     "Día": d['dia'],
@@ -1153,7 +1163,8 @@ if st.session_state.get('calculo_terminado', False):
                     "Hs de Inicio": h_inicio.strftime("%H:%M"),
                     "Hs de Finalización": hora_llegada_final,
                     "Minutos de Demora": minutos_demora_real,
-                    "Kms Recorridos": round(dist_acum, 2)
+                    "Kms Recorridos": round(dist_acum, 2),
+                    "Link Google Maps": enlace_maps
                 })
                 
                 with st.expander("Ver Cronograma Detallado"):
@@ -1171,7 +1182,14 @@ if st.session_state.get('calculo_terminado', False):
         st.info("Este es el resumen general para auditar la eficiencia y horarios reales de finalización de todos los autos.")
         
         df_resumen = pd.DataFrame(data_resumen_general)
-        st.dataframe(df_resumen, use_container_width=True)
+        
+        st.dataframe(
+            df_resumen, 
+            use_container_width=True,
+            column_config={
+                "Link Google Maps": st.column_config.LinkColumn("🗺️ Ver en Google Maps", display_text="Abrir Ruta")
+            }
+        )
         
         bio_resumen = io.BytesIO()
         with pd.ExcelWriter(bio_resumen, engine='openpyxl') as w:
