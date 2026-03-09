@@ -265,16 +265,12 @@ else:
                 st.error(f"❌ No se encontró la columna '{col}' en tu archivo Excel.")
                 st.stop()
 
-        # --- BLINDAJE DE MEMORIA: Previene cualquier NameError de Streamlit ---
+        # BLINDAJE DE MEMORIA PARA EVITAR CUALQUIER NAMEERROR
         punto_final_vrp = ""
         hora_salida_vrp = datetime.time(8, 0)
         hora_llegada_vrp = datetime.time(14, 30)
         min_parada_vrp = 15
-        opciones_inicio_dict = {}
-        opciones_fin_dict = {}
-        hora_salida_rutas_dict = {}  
-        rutas_seleccionadas = []
-
+        
         st.sidebar.header("1. Filtro de Días")
         dias_disponibles = df['Día'].unique().tolist()
         todos_dias = st.sidebar.checkbox("✔️ Todos los Días", value=True)
@@ -305,6 +301,11 @@ else:
                 "Creación de rutas propias (Departamental Fijo - Patrón Fijo)"
             ]
         )
+
+        opciones_inicio_dict = {}
+        opciones_fin_dict = {}
+        hora_salida_rutas_dict = {}  
+        rutas_seleccionadas = []
 
         if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"]:
             st.sidebar.markdown("**Filtro de Rutas**")
@@ -386,16 +387,32 @@ else:
             st.session_state['hora_salida_rutas_dict'] = hora_salida_rutas_dict
             
             with st.spinner("Procesando la red logística y calculando tiempos..."):
+                lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
+                lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
+                mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
+                
                 colores = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'cadetblue', 'darkblue', 'pink', 'lightgreen']
                 datos_para_resumen = []
                 color_idx = 0
                 headers = {'Authorization': api_key, 'Content-Type': 'application/json'}
+
+                # Aseguramos que destino_row_global exista siempre en memoria si es necesario
+                destino_row_global = None
+                if "Creación de rutas propias" in tipo_ruteo:
+                    try:
+                        destino_row_global = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
+                    except Exception:
+                        destino_row_global = df[df['Lugar'] == punto_final_vrp].iloc[0]
 
                 # ==========================================================
                 # LÓGICA 1 Y 2: RUTEO CLÁSICO Y OPTIMIZADO
                 # ==========================================================
                 if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"]:
                     for dia in dias_seleccionados:
+                        df_dia_general = df[df['Día'] == dia]
+                        if not df_dia_general.empty:
+                            dibujar_geozona_circular(df_dia_general['Coords_Procesadas'].tolist(), f"🌍 DÍA: {dia}", "black", mapa_calculado)
+
                         for ruta in rutas_seleccionadas:
                             df_ruta = df[(df['Día'] == dia) & (df['Ruta'] == ruta)].copy().reset_index(drop=True)
                             if df_ruta.empty: continue
@@ -405,6 +422,8 @@ else:
                             color_idx += 1
                             
                             lista_coords = df_ruta['Coords_Procesadas'].tolist()
+                            dibujar_geozona_circular(lista_coords, f"🗺️ {ruta}", color_actual, mapa_calculado)
+                            
                             nodos_ordenados = []
                             coords_ordenadas = []
 
@@ -513,18 +532,17 @@ else:
                 # LÓGICA 3 Y 4: CREACIÓN DE RUTAS PROPIAS (LIBRE Y FLEXIBLE DIARIO)
                 # ==========================================================
                 elif tipo_ruteo in ["Creación de rutas propias (Ideal Libre)", "Creación de rutas propias (Departamental Flexible)"]:
-                    destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
-                    
                     for dia in dias_seleccionados:
                         df_dia = df[df['Día'] == dia].copy().reset_index(drop=True)
                         if punto_final_vrp not in df_dia['Lugar'].values:
-                            df_dia = pd.concat([df_dia, destino_row.to_frame().T], ignore_index=True)
+                            df_dia = pd.concat([df_dia, destino_row_global.to_frame().T], ignore_index=True)
                         
                         end_idx = df_dia[df_dia['Lugar'] == punto_final_vrp].index[0]
                         lista_coords = df_dia['Coords_Procesadas'].tolist()
                         num_locs = len(lista_coords)
                         
                         if num_locs < 2: continue
+                        dibujar_geozona_circular(lista_coords, f"🌍 DÍA: {dia} (Zona)", "black", mapa_calculado)
 
                         matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
                         if err_matriz == "QUOTA_EXCEEDED":
@@ -650,10 +668,12 @@ else:
                 # LÓGICA 5: CREACIÓN DE RUTAS PROPIAS (DEPARTAMENTAL FIJO - NORMAL)
                 # ==========================================================
                 elif tipo_ruteo == "Creación de rutas propias (Departamental Fijo)":
-                    destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
-                    
                     for dia in dias_seleccionados:
                         df_dia_completo = df[df['Día'] == dia].copy().reset_index(drop=True)
+                        lista_coords_dia = df_dia_completo['Coords_Procesadas'].tolist()
+                        if len(lista_coords_dia) > 1:
+                            dibujar_geozona_circular(lista_coords_dia, f"🌍 DÍA: {dia} (Zona Global)", "black", mapa_calculado)
+
                         dept_series = df_dia_completo[df_dia_completo['Lugar'] != punto_final_vrp]['Departamento']
                         departamentos = [d for d in dept_series.unique() if pd.notna(d) and str(d).strip() != '']
                         vehiculo_real_count = 1
@@ -662,7 +682,7 @@ else:
                             df_dept = df_dia_completo[(df_dia_completo['Departamento'] == dept) & (df_dia_completo['Lugar'] != punto_final_vrp)].copy().reset_index(drop=True)
                             if df_dept.empty: continue
                             
-                            df_dept = pd.concat([df_dept, destino_row.to_frame().T], ignore_index=True)
+                            df_dept = pd.concat([df_dept, destino_row_global.to_frame().T], ignore_index=True)
                             end_idx = len(df_dept) - 1
                             lista_coords = df_dept['Coords_Procesadas'].tolist()
                             num_locs = len(lista_coords)
@@ -780,14 +800,12 @@ else:
                 # LÓGICA 6, 7 Y 8: CREACIÓN DE RUTAS PROPIAS (PATRÓN MAESTRO - CON LÍMITE ESTRICTO DE +10 MIN)
                 # ==========================================================
                 elif "Patrón Fijo" in tipo_ruteo:
-                    destino_row = df_filtrado_dias[df_filtrado_dias['Lugar'] == punto_final_vrp].iloc[0]
-
                     st.info("🧠 Generando Patrón Maestro: Extrayendo los clientes esporádicos para garantizar la FLOTA MÍNIMA. Los sobrantes se inyectarán con límite matemático ESTRICTO de +10 minutos.")
                     
                     df_total_puntos = df_filtrado_dias[df_filtrado_dias['Lugar'] != punto_final_vrp].drop_duplicates(subset=['Lugar']).copy().reset_index(drop=True)
                     
                     # MATRIZ ÚNICA MUNDIAL
-                    df_master_global = pd.concat([df_total_puntos, destino_row.to_frame().T], ignore_index=True)
+                    df_master_global = pd.concat([df_total_puntos, destino_row_global.to_frame().T], ignore_index=True)
                     lista_coords_global = df_master_global['Coords_Procesadas'].tolist()
                     lugares_globales = df_master_global['Lugar'].tolist()
                     end_idx_global = len(lugares_globales) - 1
@@ -925,7 +943,6 @@ else:
                                         t_sim, d_sim = calcular_tiempo_ruta_en_dia_especifico(ruta_simulada, day)
                                         
                                         # LA REGLA DE ORO DE LOS +10 MINUTOS EXACTOS (600 SEGUNDOS)
-                                        # Ni un minuto más, ni un minuto menos. Si da 14:41, lo aborta.
                                         if t_sim > (max_time_sec + 600):
                                             es_valida = False
                                             break
@@ -953,61 +970,61 @@ else:
                             })
                             vehiculo_real_count += 1
 
-                # --- 4. APLICAR EL PATRÓN A CADA DÍA ---
-                st.info("🗓️ Imprimiendo el Patrón Maestro final. Como la IA simuló el reloj estricto en la inyección (Max +10 min), mantenemos la flota mínima sin desfasar los horarios.")
-                for dia in dias_seleccionados:
-                    df_dia = df[df['Día'] == dia].copy().reset_index(drop=True)
-                    if punto_final_vrp not in df_dia['Lugar'].values:
-                        df_dia = pd.concat([df_dia, destino_row.to_frame().T], ignore_index=True)
+                    # --- 4. APLICAR EL PATRÓN A CADA DÍA ---
+                    st.info("🗓️ Imprimiendo el Patrón Maestro final. Como la IA simuló el reloj estricto en la inyección (Max +10 min), mantenemos la flota mínima sin desfasar los horarios.")
+                    for dia in dias_seleccionados:
+                        df_dia = df[df['Día'] == dia].copy().reset_index(drop=True)
+                        if punto_final_vrp not in df_dia['Lugar'].values:
+                            df_dia = pd.concat([df_dia, destino_row_global.to_frame().T], ignore_index=True)
 
-                    lugares_del_dia = set(df_dia['Lugar'].tolist())
+                        lugares_del_dia = set(df_dia['Lugar'].tolist())
 
-                    for ruta_maestra in rutas_maestras_base:
-                        lugares_hoy = [l for l in ruta_maestra['lugares'] if l in lugares_del_dia]
+                        for ruta_maestra in rutas_maestras_base:
+                            lugares_hoy = [l for l in ruta_maestra['lugares'] if l in lugares_del_dia]
 
-                        if len(lugares_hoy) < 2: continue 
+                            if len(lugares_hoy) < 2: continue 
 
-                        if lugares_hoy[-1] != punto_final_vrp:
-                            if punto_final_vrp in lugares_hoy:
-                                lugares_hoy.remove(punto_final_vrp)
-                            lugares_hoy.append(punto_final_vrp)
+                            if lugares_hoy[-1] != punto_final_vrp:
+                                if punto_final_vrp in lugares_hoy:
+                                    lugares_hoy.remove(punto_final_vrp)
+                                lugares_hoy.append(punto_final_vrp)
 
-                        filas_hoy = []
-                        coords_ordenadas = []
-                        for l in lugares_hoy:
-                            fila = df_dia[df_dia['Lugar'] == l].iloc[0]
-                            filas_hoy.append(fila)
-                            coords_ordenadas.append(fila['Coords_Procesadas'])
+                            filas_hoy = []
+                            coords_ordenadas = []
+                            for l in lugares_hoy:
+                                fila = df_dia[df_dia['Lugar'] == l].iloc[0]
+                                filas_hoy.append(fila)
+                                coords_ordenadas.append(fila['Coords_Procesadas'])
 
-                        df_ruta_hoy = pd.DataFrame(filas_hoy)
-                        ruta_nombre = ruta_maestra["nombre"]
-                        id_unico = f"{dia} - {ruta_nombre}"
-                        color_actual = colores[ruta_maestra["color_idx"] % len(colores)]
+                            df_ruta_hoy = pd.DataFrame(filas_hoy)
+                            ruta_nombre = ruta_maestra["nombre"]
+                            id_unico = f"{dia} - {ruta_nombre}"
+                            color_actual = colores[ruta_maestra["color_idx"] % len(colores)]
 
-                        geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
-                        if err_dirs:
-                            st.error(err_dirs)
-                            continue
+                            geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
+                            if err_dirs:
+                                st.error(err_dirs)
+                                continue
 
-                        props = geojson['features'][0]['properties']['summary']
-                        segments = geojson['features'][0]['properties'].get('segments', [])
+                            props = geojson['features'][0]['properties']['summary']
+                            segments = geojson['features'][0]['properties'].get('segments', [])
 
-                        paradas_info = []
-                        for _, row_hoy in df_ruta_hoy.iterrows():
-                            paradas_info.append({
-                                "Día": row_hoy.get('Día',''), "Ruta": ruta_nombre,
-                                "Departamento": row_hoy.get('Departamento',''), "Lugar": row_hoy.get('Lugar',''),
-                                "Coordenadas": row_hoy.get('Coordenadas','')
+                            paradas_info = []
+                            for _, row_hoy in df_ruta_hoy.iterrows():
+                                paradas_info.append({
+                                    "Día": row_hoy.get('Día',''), "Ruta": ruta_nombre,
+                                    "Departamento": row_hoy.get('Departamento',''), "Lugar": row_hoy.get('Lugar',''),
+                                    "Coordenadas": row_hoy.get('Coordenadas','')
+                                })
+
+                            datos_para_resumen.append({
+                                "id_unico": id_unico, "dia": dia, "ruta": ruta_nombre,
+                                "puntos": len(df_ruta_hoy), "dist_km": round(props['distance']/1000, 2),
+                                "drive_mins": round(props['duration']/60, 0), "color": color_actual,
+                                "paradas": paradas_info, "segmentos": segments,
+                                "geojson": geojson,
+                                "coords_ordenadas": coords_ordenadas
                             })
-
-                        datos_para_resumen.append({
-                            "id_unico": id_unico, "dia": dia, "ruta": ruta_nombre,
-                            "puntos": len(df_ruta_hoy), "dist_km": round(props['distance']/1000, 2),
-                            "drive_mins": round(props['duration']/60, 0), "color": color_actual,
-                            "paradas": paradas_info, "segmentos": segments,
-                            "geojson": geojson,
-                            "coords_ordenadas": coords_ordenadas
-                        })
 
                 st.session_state['datos_resumen'] = datos_para_resumen
                 st.session_state['calculo_terminado'] = True
@@ -1032,14 +1049,12 @@ if st.session_state.get('calculo_terminado', False):
         )
         mostrar_capas = (opcion_capas == "✅ Mostrar Todas las Rutas")
         
-        # Dibujo instantáneo del mapa usando los datos guardados en memoria
         if st.session_state['datos_resumen']:
             coords_centro = st.session_state['datos_resumen'][0]['coords_ordenadas'][0]
             lat_centro = coords_centro[1]
             lon_centro = coords_centro[0]
             mapa_dinamico = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
             
-            # Dibujar geozonas globales negras (agrupando por día)
             coords_por_dia = {}
             for d in st.session_state['datos_resumen']:
                 dia = d['dia']
@@ -1049,7 +1064,6 @@ if st.session_state.get('calculo_terminado', False):
             for dia, coords in coords_por_dia.items():
                 dibujar_geozona_circular(coords, f"🌍 DÍA: {dia}", "black", mapa_dinamico, mostrar_por_defecto=mostrar_capas)
                 
-            # Dibujar rutas individuales
             for d in st.session_state['datos_resumen']:
                 dibujar_geozona_circular(d['coords_ordenadas'], f"🗺️ Zona: {d['ruta']} ({d['dia']})", d['color'], mapa_dinamico, mostrar_por_defecto=mostrar_capas)
                 
@@ -1156,7 +1170,6 @@ if st.session_state.get('calculo_terminado', False):
                 else:
                     minutos_demora_real = 0
                     
-                # CONSTRUCCIÓN DEL ENLACE DE GOOGLE MAPS
                 waypoints = []
                 for p in d['paradas']:
                     coord_raw = str(p.get('Coordenadas', ''))
