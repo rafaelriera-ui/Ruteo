@@ -260,6 +260,21 @@ else:
     # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL TOTALMENTE INTACTA)
     # ======================================================================
     else:
+        for col in ['Coordenadas', 'Día']:
+            if col not in df.columns:
+                st.error(f"❌ No se encontró la columna '{col}' en tu archivo Excel.")
+                st.stop()
+
+        # --- BLINDAJE DE MEMORIA: Previene cualquier NameError de Streamlit ---
+        punto_final_vrp = ""
+        hora_salida_vrp = datetime.time(8, 0)
+        hora_llegada_vrp = datetime.time(14, 30)
+        min_parada_vrp = 15
+        opciones_inicio_dict = {}
+        opciones_fin_dict = {}
+        hora_salida_rutas_dict = {}  
+        rutas_seleccionadas = []
+
         st.sidebar.header("1. Filtro de Días")
         dias_disponibles = df['Día'].unique().tolist()
         todos_dias = st.sidebar.checkbox("✔️ Todos los Días", value=True)
@@ -290,11 +305,6 @@ else:
                 "Creación de rutas propias (Departamental Fijo - Patrón Fijo)"
             ]
         )
-
-        opciones_inicio_dict = {}
-        opciones_fin_dict = {}
-        hora_salida_rutas_dict = {}  
-        rutas_seleccionadas = []
 
         if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"]:
             st.sidebar.markdown("**Filtro de Rutas**")
@@ -349,6 +359,10 @@ else:
                 st.sidebar.info("🚀 Modo Ideal Libre: Ignora fronteras geográficas. Prioriza únicamente el ahorro MÁXIMO de vehículos.")
                 
             opciones_lugar_vrp = df_filtrado_dias['Lugar'].unique().tolist() if dias_seleccionados else []
+            if not opciones_lugar_vrp:
+                st.sidebar.error("No hay lugares válidos en los días seleccionados.")
+                st.stop()
+                
             punto_final_vrp = st.sidebar.selectbox("📍 Punto final de TODAS las rutas:", opciones_lugar_vrp)
             
             col_salida, col_llegada = st.sidebar.columns(2)
