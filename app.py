@@ -10,6 +10,7 @@ import io
 import datetime
 import re
 import time 
+import urllib.parse
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Gestor de Rutas Logísticas", layout="wide")
@@ -45,7 +46,6 @@ function toggleFoliumLayers(turnOn, e) {
     });
 }
 
-// Bloquea los clics para que no se arrastre el mapa por accidente al tocar los botones
 var panel = document.getElementById('panel-botones-capas');
 if(panel) {
     panel.addEventListener('mousedown', function(e){ e.stopPropagation(); });
@@ -207,11 +207,6 @@ def obtener_trazado_masivo(coords_ordenadas, headers):
 # =====================================================================
 # BLOQUE DE SEGURIDAD ABSOLUTA: Nada se ejecuta si no hay archivo
 # =====================================================================
-# --- BARRA LATERAL: CARGA ---
-st.sidebar.markdown("---")
-st.sidebar.header("Carga de Datos")
-archivo_subido = st.sidebar.file_uploader("Sube tu archivo Excel", type=["xlsx", "xls"])
-
 if archivo_subido is None:
     st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
 else:
@@ -453,6 +448,8 @@ else:
                             color_idx += 1
                             
                             lista_coords = df_ruta['Coords_Procesadas'].tolist()
+                            dibujar_geozona_circular(lista_coords, f"🗺️ {ruta}", color_actual, mapa_calculado)
+                            
                             nodos_ordenados = []
                             coords_ordenadas = []
 
@@ -1002,6 +999,10 @@ else:
                             df_dia = pd.concat([df_dia, destino_row_global.to_frame().T], ignore_index=True)
 
                         lugares_del_dia = set(df_dia['Lugar'].tolist())
+                        
+                        lista_coords_dia = df_dia['Coords_Procesadas'].tolist()
+                        if len(lista_coords_dia) > 1:
+                            dibujar_geozona_circular(lista_coords_dia, f"🌍 DÍA: {dia}", "black", mapa_calculado)
 
                         for ruta_maestra in rutas_maestras_base:
                             lugares_hoy = [l for l in ruta_maestra['lugares'] if l in lugares_del_dia]
@@ -1049,7 +1050,24 @@ else:
                                 "geojson": geojson,
                                 "coords_ordenadas": coords_ordenadas
                             })
+                            
+                            fg_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta_nombre} ({dia})")
+                            folium.GeoJson(geojson, style_function=lambda x, c=color_actual: {'color':c, 'weight':4, 'opacity':0.8}).add_to(fg_trazado)
 
+                            for i, (_, row_hoy) in enumerate(df_ruta_hoy.iterrows()):
+                                lat, lon = row_hoy['Coords_Procesadas'][1], row_hoy['Coords_Procesadas'][0]
+                                popup_txt = f"<b>{i+1}. {row_hoy.get('Lugar','')}</b><br>{row_hoy.get('Departamento','')}"
+                                icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{i+1}</div>"
+                                folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
+
+                            fg_trazado.add_to(mapa_calculado)
+
+                folium.LayerControl(collapsed=True).add_to(mapa_calculado)
+                
+                # --- INYECCIÓN DE LOS BOTONES DE APAGADO/PRENDIDO DE CAPAS ---
+                mapa_calculado.get_root().html.add_child(folium.Element(js_toggle_capas))
+                
+                st.session_state['mapa_guardado'] = mapa_calculado
                 st.session_state['datos_resumen'] = datos_para_resumen
                 st.session_state['calculo_terminado'] = True
 
@@ -1193,8 +1211,11 @@ if st.session_state.get('calculo_terminado', False):
                 else:
                     minutos_demora_real = 0
                     
+                # CONSTRUCCIÓN DE ENLACES DE RUTEO
                 waypoints_maps = []
-                waypoints_ors = []
+                waypoints_ors_json = []
+                places_ors = []
+                
                 for p in d['paradas']:
                     coord_raw = str(p.get('Coordenadas', ''))
                     partes = coord_raw.split(',')
@@ -1202,15 +1223,27 @@ if st.session_state.get('calculo_terminado', False):
                         try:
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
-                            # Para Google Maps el formato es Latitud, Longitud
+                            
+                            # Google Maps usa Latitud, Longitud
                             waypoints_maps.append(f"{lat},{lon}")
-                            # Para OpenRouteService la URL exige Longitud, Latitud (¡Si no te manda al Océano Antártico!)
-                            waypoints_ors.append(f"{lon},{lat}") 
+                            
+                            # ORS nativo usa obligatoriamente Longitud, Latitud (¡Para evitar ir al océano!)
+                            waypoints_ors_json.append(f"{lon},{lat}")
+                            places_ors.append("Parada")
                         except Exception:
                             pass
                 
+                # Google Maps Link Oficial (Funciona perfecto en celular)
                 enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
-                enlace_ors = "https://maps.openrouteservice.org/directions?a=" + ",".join(waypoints_ors) + "&b=0&c=0&k1=es-ES&k2=km" if waypoints_ors else ""
+                
+                # ORS Link Nativo JSON (Para forzar a que dibuje la línea azul de inmediato)
+                if waypoints_ors_json:
+                    places_str = "/".join(places_ors)
+                    json_str = '{"coordinates":"' + ";".join(waypoints_ors_json) + '","options":{"profile":"driving-car","preference":"recommended"}}'
+                    encoded_json = urllib.parse.quote(json_str)
+                    enlace_ors = f"https://maps.openrouteservice.org/#/directions/{places_str}/data/{encoded_json}"
+                else:
+                    enlace_ors = ""
                 
                 data_resumen_general.append({
                     "Día": d['dia'],
