@@ -11,7 +11,6 @@ import datetime
 import re
 import time 
 import urllib.parse
-import openpyxl # IMPORTANTE: Librería necesaria para dar formato azul de Hipervínculo al Excel
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Gestor de Rutas Logísticas", layout="wide")
@@ -47,7 +46,6 @@ function toggleFoliumLayers(turnOn, e) {
     });
 }
 
-// Bloquea los clics para que no se arrastre el mapa por accidente al tocar los botones
 var panel = document.getElementById('panel-botones-capas');
 if(panel) {
     panel.addEventListener('mousedown', function(e){ e.stopPropagation(); });
@@ -292,11 +290,6 @@ else:
     # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL TOTALMENTE INTACTA)
     # ======================================================================
     else:
-        for col in ['Coordenadas', 'Día']:
-            if col not in df.columns:
-                st.error(f"❌ No se encontró la columna '{col}' en tu archivo Excel.")
-                st.stop()
-
         # BLINDAJE DE MEMORIA PARA EVITAR CUALQUIER NAMEERROR
         punto_final_vrp = ""
         hora_salida_vrp = datetime.time(8, 0)
@@ -455,6 +448,8 @@ else:
                             color_idx += 1
                             
                             lista_coords = df_ruta['Coords_Procesadas'].tolist()
+                            dibujar_geozona_circular(lista_coords, f"🗺️ {ruta}", color_actual, mapa_calculado)
+                            
                             nodos_ordenados = []
                             coords_ordenadas = []
 
@@ -1229,20 +1224,22 @@ if st.session_state.get('calculo_terminado', False):
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
                             
-                            # Google Maps pide Latitud, Longitud
+                            # Google Maps usa Latitud, Longitud
                             waypoints_maps.append(f"{lat},{lon}")
                             
-                            # ORS exige explícitamente Longitud, Latitud
+                            # ORS nativo usa obligatoriamente Longitud, Latitud (¡Para evitar ir al océano!)
                             waypoints_ors_json.append(f"{lon},{lat}")
                             places_ors.append("Parada")
                         except Exception:
                             pass
                 
-                enlace_maps = "http://googleusercontent.com/maps.google.com/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
+                # Google Maps Link Oficial (Funciona perfecto en celular)
+                enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
                 
+                # ORS Link Nativo JSON (Para forzar a que dibuje la línea azul de inmediato)
                 if waypoints_ors_json:
                     places_str = "/".join(places_ors)
-                    json_str = '{"coordinates":[' + ",".join([f"[{wp}]" for wp in waypoints_ors_json]) + '],"options":{"profile":"driving-car","preference":"recommended"}}'
+                    json_str = '{"coordinates":"' + ";".join(waypoints_ors_json) + '","options":{"profile":"driving-car","preference":"recommended"}}'
                     encoded_json = urllib.parse.quote(json_str)
                     enlace_ors = f"https://maps.openrouteservice.org/#/directions/{places_str}/data/{encoded_json}"
                 else:
@@ -1284,36 +1281,9 @@ if st.session_state.get('calculo_terminado', False):
             }
         )
         
-        # --- MODIFICACIÓN PARA ENLACES LIMPIOS EN EXCEL ---
-        df_resumen_export = df_resumen.copy()
-        if "Link Google Maps" in df_resumen_export.columns:
-            df_resumen_export["Link Google Maps"] = df_resumen_export["Link Google Maps"].apply(lambda x: "Abrir Maps" if pd.notna(x) and str(x).startswith("http") else "")
-        if "Link ORS" in df_resumen_export.columns:
-            df_resumen_export["Link ORS"] = df_resumen_export["Link ORS"].apply(lambda x: "Abrir ORS" if pd.notna(x) and str(x).startswith("http") else "")
-            
         bio_resumen = io.BytesIO()
         with pd.ExcelWriter(bio_resumen, engine='openpyxl') as w:
-            df_resumen_export.to_excel(w, index=False, sheet_name="Resumen")
-            ws = w.sheets["Resumen"]
-            font_link = openpyxl.styles.Font(color="0563C1", underline="single")
-            
-            for r_idx in range(len(df_resumen)):
-                row_excel = r_idx + 2
-                if 'Link Google Maps' in df_resumen.columns:
-                    c_idx = df_resumen.columns.get_loc('Link Google Maps') + 1
-                    url_maps = df_resumen.iloc[r_idx]['Link Google Maps']
-                    if pd.notna(url_maps) and str(url_maps).startswith("http"):
-                        celda = ws.cell(row=row_excel, column=c_idx)
-                        celda.hyperlink = str(url_maps)
-                        celda.font = font_link
-                        
-                if 'Link ORS' in df_resumen.columns:
-                    c_idx = df_resumen.columns.get_loc('Link ORS') + 1
-                    url_ors = df_resumen.iloc[r_idx]['Link ORS']
-                    if pd.notna(url_ors) and str(url_ors).startswith("http"):
-                        celda = ws.cell(row=row_excel, column=c_idx)
-                        celda.hyperlink = str(url_ors)
-                        celda.font = font_link
+            df_resumen.to_excel(w, index=False, sheet_name="Resumen")
         
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
@@ -1324,27 +1294,6 @@ if st.session_state.get('calculo_terminado', False):
             bio_g = io.BytesIO()
             with pd.ExcelWriter(bio_g, engine='openpyxl') as w:
                 df_glob.to_excel(w, index=False, sheet_name="Cronograma Detallado")
-                df_resumen_export.to_excel(w, index=False, sheet_name="Resumen General") 
-                
-                ws = w.sheets["Resumen General"]
-                font_link = openpyxl.styles.Font(color="0563C1", underline="single")
-                for r_idx in range(len(df_resumen)):
-                    row_excel = r_idx + 2
-                    if 'Link Google Maps' in df_resumen.columns:
-                        c_idx = df_resumen.columns.get_loc('Link Google Maps') + 1
-                        url_maps = df_resumen.iloc[r_idx]['Link Google Maps']
-                        if pd.notna(url_maps) and str(url_maps).startswith("http"):
-                            celda = ws.cell(row=row_excel, column=c_idx)
-                            celda.hyperlink = str(url_maps)
-                            celda.font = font_link
-                            
-                    if 'Link ORS' in df_resumen.columns:
-                        c_idx = df_resumen.columns.get_loc('Link ORS') + 1
-                        url_ors = df_resumen.iloc[r_idx]['Link ORS']
-                        if pd.notna(url_ors) and str(url_ors).startswith("http"):
-                            celda = ws.cell(row=row_excel, column=c_idx)
-                            celda.hyperlink = str(url_ors)
-                            celda.font = font_link
-                            
+                df_resumen.to_excel(w, index=False, sheet_name="Resumen General") 
             with col_btn2:
                 st.download_button("📥 DESCARGAR CRONOGRAMA MAESTRO (Completo)", bio_g.getvalue(), "Cronograma_Maestro.xlsx", type="primary", use_container_width=True)
