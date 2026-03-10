@@ -243,6 +243,10 @@ else:
             with st.spinner("Procesando trazados desde el archivo..."):
                 df_valido = df.sort_values(by=['Día', 'Ruta', 'Orden'])
                 
+                lat_centro = df_valido.iloc[0]['Coords_Procesadas'][1]
+                lon_centro = df_valido.iloc[0]['Coords_Procesadas'][0]
+                mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
+                
                 colores = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'cadetblue', 'darkblue', 'pink', 'lightgreen']
                 datos_para_resumen = []
                 color_idx = 0
@@ -256,6 +260,7 @@ else:
                     color_idx += 1
                     
                     coords_ordenadas = df_grupo['Coords_Procesadas'].tolist()
+                    dibujar_geozona_circular(coords_ordenadas, f"🗺️ {ruta} ({dia})", color_actual, mapa_calculado)
                     
                     if len(coords_ordenadas) > 1:
                         geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
@@ -282,7 +287,21 @@ else:
                             "geojson": geojson,
                             "coords_ordenadas": coords_ordenadas
                         })
+                        
+                        fg_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta} ({dia})")
+                        folium.GeoJson(geojson, style_function=lambda x, c=color_actual: {'color':c, 'weight':4, 'opacity':0.8}).add_to(fg_trazado)
+                        
+                        for i, (_, row) in enumerate(df_grupo.iterrows()):
+                            lat, lon = row['Coords_Procesadas'][1], row['Coords_Procesadas'][0]
+                            popup_txt = f"<b>{row.get('Orden','')}. {row.get('Lugar','')}</b><br>{row.get('Departamento','')}"
+                            icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{row.get('Orden','')}</div>"
+                            folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
+                        
+                        fg_trazado.add_to(mapa_calculado)
 
+                folium.LayerControl(collapsed=True).add_to(mapa_calculado)
+                mapa_calculado.get_root().html.add_child(folium.Element(js_toggle_capas))
+                st.session_state['mapa_guardado'] = mapa_calculado
                 st.session_state['datos_resumen'] = datos_para_resumen
                 st.session_state['calculo_terminado'] = True
 
@@ -290,6 +309,11 @@ else:
     # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL TOTALMENTE INTACTA)
     # ======================================================================
     else:
+        for col in ['Coordenadas', 'Día']:
+            if col not in df.columns:
+                st.error(f"❌ No se encontró la columna '{col}' en tu archivo Excel.")
+                st.stop()
+
         # BLINDAJE DE MEMORIA PARA EVITAR CUALQUIER NAMEERROR
         punto_final_vrp = ""
         hora_salida_vrp = datetime.time(8, 0)
@@ -412,6 +436,13 @@ else:
             st.session_state['hora_salida_rutas_dict'] = hora_salida_rutas_dict
             
             with st.spinner("Procesando la red logística y calculando tiempos..."):
+                
+                # --- LA CREACIÓN DEL MAPA QUE SE HABÍA PERDIDO VUELVE A ESTAR AQUÍ ---
+                lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
+                lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
+                mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
+                # ---------------------------------------------------------------------
+
                 colores = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'cadetblue', 'darkblue', 'pink', 'lightgreen']
                 datos_para_resumen = []
                 color_idx = 0
@@ -443,6 +474,8 @@ else:
                             color_idx += 1
                             
                             lista_coords = df_ruta['Coords_Procesadas'].tolist()
+                            dibujar_geozona_circular(lista_coords, f"🗺️ {ruta}", color_actual, mapa_calculado)
+                            
                             nodos_ordenados = []
                             coords_ordenadas = []
 
@@ -544,6 +577,17 @@ else:
                                         "geojson": geojson,
                                         "coords_ordenadas": coords_ordenadas
                                     })
+                                    
+                                    fg_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta}")
+                                    folium.GeoJson(geojson, style_function=lambda x, c=color_actual: {'color':c, 'weight':4, 'opacity':0.8}).add_to(fg_trazado)
+                                    
+                                    for i, nodo_idx in enumerate(nodos_ordenados):
+                                        fila = df_ruta.iloc[nodo_idx]
+                                        lat, lon = fila['Coords_Procesadas'][1], fila['Coords_Procesadas'][0]
+                                        popup_txt = f"<b>{i+1}. {fila.get('Lugar','')}</b><br>{fila.get('Departamento','')}"
+                                        icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{i+1}</div>"
+                                        folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
+                                    fg_trazado.add_to(mapa_calculado)
                                 else:
                                     st.error(f"Error trazando calles de {ruta}: {err_dirs}")
 
@@ -561,6 +605,7 @@ else:
                         num_locs = len(lista_coords)
                         
                         if num_locs < 2: continue
+                        dibujar_geozona_circular(lista_coords, f"🌍 DÍA: {dia} (Zona)", "black", mapa_calculado)
 
                         matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
                         if err_matriz == "QUOTA_EXCEEDED":
@@ -675,6 +720,16 @@ else:
                                             "geojson": geojson,
                                             "coords_ordenadas": coords_ordenadas
                                         })
+                                        
+                                        fg_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta_nombre} ({dia})")
+                                        folium.GeoJson(geojson, style_function=lambda x, c=color_actual: {'color':c, 'weight':4, 'opacity':0.8}).add_to(fg_trazado)
+                                        for i, nodo_idx in enumerate(nodos_ordenados):
+                                            fila = df_dia.iloc[nodo_idx]
+                                            lat, lon = fila['Coords_Procesadas'][1], fila['Coords_Procesadas'][0]
+                                            popup_txt = f"<b>{i+1}. {fila.get('Lugar','')}</b><br>{fila.get('Departamento','')}"
+                                            icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{i+1}</div>"
+                                            folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
+                                        fg_trazado.add_to(mapa_calculado)
                                     else:
                                         st.error(f"Error en trazado: {err_dirs}")
                             else:
@@ -688,6 +743,10 @@ else:
                 elif tipo_ruteo == "Creación de rutas propias (Departamental Fijo)":
                     for dia in dias_seleccionados:
                         df_dia_completo = df[df['Día'] == dia].copy().reset_index(drop=True)
+                        lista_coords_dia = df_dia_completo['Coords_Procesadas'].tolist()
+                        if len(lista_coords_dia) > 1:
+                            dibujar_geozona_circular(lista_coords_dia, f"🌍 DÍA: {dia} (Zona Global)", "black", mapa_calculado)
+
                         dept_series = df_dia_completo[df_dia_completo['Lugar'] != punto_final_vrp]['Departamento']
                         departamentos = [d for d in dept_series.unique() if pd.notna(d) and str(d).strip() != '']
                         vehiculo_real_count = 1
@@ -803,6 +862,16 @@ else:
                                                 "geojson": geojson,
                                                 "coords_ordenadas": coords_ordenadas
                                             })
+                                            
+                                            fg_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta_nombre} ({dia})")
+                                            folium.GeoJson(geojson, style_function=lambda x, c=color_actual: {'color':c, 'weight':4, 'opacity':0.8}).add_to(fg_trazado)
+                                            for i, nodo_idx in enumerate(nodos_ordenados):
+                                                fila = df_dept.iloc[nodo_idx]
+                                                lat, lon = fila['Coords_Procesadas'][1], fila['Coords_Procesadas'][0]
+                                                popup_txt = f"<b>{i+1}. {fila.get('Lugar','')}</b><br>{fila.get('Departamento','')}"
+                                                icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{i+1}</div>"
+                                                folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
+                                            fg_trazado.add_to(mapa_calculado)
                                         else:
                                             st.error(f"Error en trazado: {err_dirs}")
                                 else:
@@ -972,6 +1041,7 @@ else:
                             if best_r != -1:
                                 rutas_core_locs[best_r].insert(best_pos, f_loc)
                             else:
+                                # Si es físicamente imposible meterlo en los autos existentes con +10 min, abre auto nuevo.
                                 rutas_core_locs.append([f_loc])
                                 
                         for r in rutas_core_locs:
@@ -983,62 +1053,83 @@ else:
                             })
                             vehiculo_real_count += 1
 
-                # --- 4. APLICAR EL PATRÓN A CADA DÍA ---
-                st.info("🗓️ Imprimiendo el Patrón Maestro final...")
-                for dia in dias_seleccionados:
-                    df_dia = df[df['Día'] == dia].copy().reset_index(drop=True)
-                    if punto_final_vrp not in df_dia['Lugar'].values:
-                        df_dia = pd.concat([df_dia, destino_row_global.to_frame().T], ignore_index=True)
+                    # --- 4. APLICAR EL PATRÓN A CADA DÍA ---
+                    st.info("🗓️ Imprimiendo el Patrón Maestro final. Como la IA simuló el reloj estricto en la inyección (Max +10 min), mantenemos la flota mínima sin desfasar los horarios.")
+                    for dia in dias_seleccionados:
+                        df_dia = df[df['Día'] == dia].copy().reset_index(drop=True)
+                        if punto_final_vrp not in df_dia['Lugar'].values:
+                            df_dia = pd.concat([df_dia, destino_row_global.to_frame().T], ignore_index=True)
 
-                    lugares_del_dia = set(df_dia['Lugar'].tolist())
+                        lugares_del_dia = set(df_dia['Lugar'].tolist())
+                        
+                        lista_coords_dia = df_dia['Coords_Procesadas'].tolist()
+                        if len(lista_coords_dia) > 1:
+                            dibujar_geozona_circular(lista_coords_dia, f"🌍 DÍA: {dia}", "black", mapa_calculado)
 
-                    for ruta_maestra in rutas_maestras_base:
-                        lugares_hoy = [l for l in ruta_maestra['lugares'] if l in lugares_del_dia]
+                        for ruta_maestra in rutas_maestras_base:
+                            lugares_hoy = [l for l in ruta_maestra['lugares'] if l in lugares_del_dia]
 
-                        if len(lugares_hoy) < 2: continue 
+                            if len(lugares_hoy) < 2: continue 
 
-                        if lugares_hoy[-1] != punto_final_vrp:
-                            if punto_final_vrp in lugares_hoy:
-                                lugares_hoy.remove(punto_final_vrp)
-                            lugares_hoy.append(punto_final_vrp)
+                            if lugares_hoy[-1] != punto_final_vrp:
+                                if punto_final_vrp in lugares_hoy:
+                                    lugares_hoy.remove(punto_final_vrp)
+                                lugares_hoy.append(punto_final_vrp)
 
-                        filas_hoy = []
-                        coords_ordenadas = []
-                        for l in lugares_hoy:
-                            fila = df_dia[df_dia['Lugar'] == l].iloc[0]
-                            filas_hoy.append(fila)
-                            coords_ordenadas.append(fila['Coords_Procesadas'])
+                            filas_hoy = []
+                            coords_ordenadas = []
+                            for l in lugares_hoy:
+                                fila = df_dia[df_dia['Lugar'] == l].iloc[0]
+                                filas_hoy.append(fila)
+                                coords_ordenadas.append(fila['Coords_Procesadas'])
 
-                        df_ruta_hoy = pd.DataFrame(filas_hoy)
-                        ruta_nombre = ruta_maestra["nombre"]
-                        id_unico = f"{dia} - {ruta_nombre}"
-                        color_actual = colores[ruta_maestra["color_idx"] % len(colores)]
+                            df_ruta_hoy = pd.DataFrame(filas_hoy)
+                            ruta_nombre = ruta_maestra["nombre"]
+                            id_unico = f"{dia} - {ruta_nombre}"
+                            color_actual = colores[ruta_maestra["color_idx"] % len(colores)]
 
-                        geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
-                        if err_dirs:
-                            st.error(err_dirs)
-                            continue
+                            geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
+                            if err_dirs:
+                                st.error(err_dirs)
+                                continue
 
-                        props = geojson['features'][0]['properties']['summary']
-                        segments = geojson['features'][0]['properties'].get('segments', [])
+                            props = geojson['features'][0]['properties']['summary']
+                            segments = geojson['features'][0]['properties'].get('segments', [])
 
-                        paradas_info = []
-                        for _, row_hoy in df_ruta_hoy.iterrows():
-                            paradas_info.append({
-                                "Día": row_hoy.get('Día',''), "Ruta": ruta_nombre,
-                                "Departamento": row_hoy.get('Departamento',''), "Lugar": row_hoy.get('Lugar',''),
-                                "Coordenadas": row_hoy.get('Coordenadas','')
+                            paradas_info = []
+                            for _, row_hoy in df_ruta_hoy.iterrows():
+                                paradas_info.append({
+                                    "Día": row_hoy.get('Día',''), "Ruta": ruta_nombre,
+                                    "Departamento": row_hoy.get('Departamento',''), "Lugar": row_hoy.get('Lugar',''),
+                                    "Coordenadas": row_hoy.get('Coordenadas','')
+                                })
+
+                            datos_para_resumen.append({
+                                "id_unico": id_unico, "dia": dia, "ruta": ruta_nombre,
+                                "puntos": len(df_ruta_hoy), "dist_km": round(props['distance']/1000, 2),
+                                "drive_mins": round(props['duration']/60, 0), "color": color_actual,
+                                "paradas": paradas_info, "segmentos": segments,
+                                "geojson": geojson,
+                                "coords_ordenadas": coords_ordenadas
                             })
+                            
+                            fg_trazado = folium.FeatureGroup(name=f"🛣️ Trazado: {ruta_nombre} ({dia})")
+                            folium.GeoJson(geojson, style_function=lambda x, c=color_actual: {'color':c, 'weight':4, 'opacity':0.8}).add_to(fg_trazado)
 
-                        datos_para_resumen.append({
-                            "id_unico": id_unico, "dia": dia, "ruta": ruta_nombre,
-                            "puntos": len(df_ruta_hoy), "dist_km": round(props['distance']/1000, 2),
-                            "drive_mins": round(props['duration']/60, 0), "color": color_actual,
-                            "paradas": paradas_info, "segmentos": segments,
-                            "geojson": geojson,
-                            "coords_ordenadas": coords_ordenadas
-                        })
+                            for i, (_, row_hoy) in enumerate(df_ruta_hoy.iterrows()):
+                                lat, lon = row_hoy['Coords_Procesadas'][1], row_hoy['Coords_Procesadas'][0]
+                                popup_txt = f"<b>{i+1}. {row_hoy.get('Lugar','')}</b><br>{row_hoy.get('Departamento','')}"
+                                icon_html = f"<div style='background:{color_actual};color:white;border-radius:50%;width:20px;text-align:center;border:1px solid white;font-weight:bold;font-size:10pt'>{i+1}</div>"
+                                folium.Marker([lat, lon], popup=popup_txt, icon=folium.DivIcon(html=icon_html)).add_to(fg_trazado)
 
+                            fg_trazado.add_to(mapa_calculado)
+
+                folium.LayerControl(collapsed=True).add_to(mapa_calculado)
+                
+                # --- INYECCIÓN DE LOS BOTONES DE APAGADO/PRENDIDO DE CAPAS ---
+                mapa_calculado.get_root().html.add_child(folium.Element(js_toggle_capas))
+                
+                st.session_state['mapa_guardado'] = mapa_calculado
                 st.session_state['datos_resumen'] = datos_para_resumen
                 st.session_state['calculo_terminado'] = True
 
@@ -1192,7 +1283,7 @@ if st.session_state.get('calculo_terminado', False):
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
                             waypoints_maps.append(f"{lat},{lon}")
-                            waypoints_ors.append(f"{lat},{lon}")
+                            waypoints_ors.append(f"{lon},{lat}") 
                         except Exception:
                             pass
                 
