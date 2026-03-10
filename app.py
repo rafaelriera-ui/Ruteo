@@ -25,6 +25,41 @@ api_key = api_key_user if api_key_user else api_key_default
 if 'calculo_terminado' not in st.session_state:
     st.session_state['calculo_terminado'] = False
 
+# --- SCRIPT DE BOTONES FLOTANTES PARA EL MAPA (REPARADO Y 100% FUNCIONAL) ---
+js_toggle_capas = """
+<div id="panel-botones-capas" style="position: absolute; top: 12px; left: 55px; z-index: 9999; background: white; padding: 6px; border-radius: 5px; box-shadow: 0 1px 5px rgba(0,0,0,0.65); font-family: sans-serif; font-size: 13px;">
+    <button type="button" onclick="toggleFoliumLayers(false, event)" style="cursor: pointer; background: #ffebee; border: 1px solid #ffcdd2; padding: 4px 8px; border-radius: 3px; font-weight: bold; margin-right: 5px; color: #b71c1c;">❌ Apagar Todo</button>
+    <button type="button" onclick="toggleFoliumLayers(true, event)" style="cursor: pointer; background: #e8f5e9; border: 1px solid #c8e6c9; padding: 4px 8px; border-radius: 3px; font-weight: bold; color: #1b5e20;">✅ Prender Todo</button>
+</div>
+<script>
+function toggleFoliumLayers(turnOn, e) {
+    if(e) {
+        e.stopPropagation();
+        e.preventDefault();
+    }
+    var checkboxes = document.querySelectorAll('.leaflet-control-layers-selector');
+    checkboxes.forEach(function(cb) {
+        if((turnOn && !cb.checked) || (!turnOn && cb.checked)) {
+            cb.click();
+        }
+    });
+}
+
+// Bloquea los clics para que no se arrastre el mapa por accidente al tocar los botones
+var panel = document.getElementById('panel-botones-capas');
+if(panel) {
+    panel.addEventListener('mousedown', function(e){ e.stopPropagation(); });
+    panel.addEventListener('dblclick', function(e){ e.stopPropagation(); });
+    panel.addEventListener('wheel', function(e){ e.stopPropagation(); });
+}
+</script>
+"""
+
+# --- BARRA LATERAL: CARGA ---
+st.sidebar.markdown("---")
+st.sidebar.header("Carga de Datos")
+archivo_subido = st.sidebar.file_uploader("Sube tu archivo Excel", type=["xlsx", "xls"])
+
 # --- FUNCIONES AUXILIARES ---
 def preparar_coordenadas(coord_str):
     try:
@@ -172,11 +207,6 @@ def obtener_trazado_masivo(coords_ordenadas, headers):
 # =====================================================================
 # BLOQUE DE SEGURIDAD ABSOLUTA: Nada se ejecuta si no hay archivo
 # =====================================================================
-# --- BARRA LATERAL: CARGA ---
-st.sidebar.markdown("---")
-st.sidebar.header("Carga de Datos")
-archivo_subido = st.sidebar.file_uploader("Sube tu archivo Excel", type=["xlsx", "xls"])
-
 if archivo_subido is None:
     st.info("👈 Por favor, sube tu archivo Excel en la barra lateral para comenzar.")
 else:
@@ -400,6 +430,10 @@ else:
                 # ==========================================================
                 if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"]:
                     for dia in dias_seleccionados:
+                        df_dia_general = df[df['Día'] == dia]
+                        if not df_dia_general.empty:
+                            dibujar_geozona_circular(df_dia_general['Coords_Procesadas'].tolist(), f"🌍 DÍA: {dia}", "black", mapa_calculado)
+
                         for ruta in rutas_seleccionadas:
                             df_ruta = df[(df['Día'] == dia) & (df['Ruta'] == ruta)].copy().reset_index(drop=True)
                             if df_ruta.empty: continue
@@ -938,7 +972,6 @@ else:
                             if best_r != -1:
                                 rutas_core_locs[best_r].insert(best_pos, f_loc)
                             else:
-                                # Si es físicamente imposible meterlo en los autos existentes con +10 min, abre auto nuevo.
                                 rutas_core_locs.append([f_loc])
                                 
                         for r in rutas_core_locs:
@@ -950,61 +983,61 @@ else:
                             })
                             vehiculo_real_count += 1
 
-                    # --- 4. APLICAR EL PATRÓN A CADA DÍA ---
-                    st.info("🗓️ Imprimiendo el Patrón Maestro final. Como la IA simuló el reloj estricto en la inyección (Max +10 min), mantenemos la flota mínima sin desfasar los horarios.")
-                    for dia in dias_seleccionados:
-                        df_dia = df[df['Día'] == dia].copy().reset_index(drop=True)
-                        if punto_final_vrp not in df_dia['Lugar'].values:
-                            df_dia = pd.concat([df_dia, destino_row_global.to_frame().T], ignore_index=True)
+                # --- 4. APLICAR EL PATRÓN A CADA DÍA ---
+                st.info("🗓️ Imprimiendo el Patrón Maestro final...")
+                for dia in dias_seleccionados:
+                    df_dia = df[df['Día'] == dia].copy().reset_index(drop=True)
+                    if punto_final_vrp not in df_dia['Lugar'].values:
+                        df_dia = pd.concat([df_dia, destino_row_global.to_frame().T], ignore_index=True)
 
-                        lugares_del_dia = set(df_dia['Lugar'].tolist())
+                    lugares_del_dia = set(df_dia['Lugar'].tolist())
 
-                        for ruta_maestra in rutas_maestras_base:
-                            lugares_hoy = [l for l in ruta_maestra['lugares'] if l in lugares_del_dia]
+                    for ruta_maestra in rutas_maestras_base:
+                        lugares_hoy = [l for l in ruta_maestra['lugares'] if l in lugares_del_dia]
 
-                            if len(lugares_hoy) < 2: continue 
+                        if len(lugares_hoy) < 2: continue 
 
-                            if lugares_hoy[-1] != punto_final_vrp:
-                                if punto_final_vrp in lugares_hoy:
-                                    lugares_hoy.remove(punto_final_vrp)
-                                lugares_hoy.append(punto_final_vrp)
+                        if lugares_hoy[-1] != punto_final_vrp:
+                            if punto_final_vrp in lugares_hoy:
+                                lugares_hoy.remove(punto_final_vrp)
+                            lugares_hoy.append(punto_final_vrp)
 
-                            filas_hoy = []
-                            coords_ordenadas = []
-                            for l in lugares_hoy:
-                                fila = df_dia[df_dia['Lugar'] == l].iloc[0]
-                                filas_hoy.append(fila)
-                                coords_ordenadas.append(fila['Coords_Procesadas'])
+                        filas_hoy = []
+                        coords_ordenadas = []
+                        for l in lugares_hoy:
+                            fila = df_dia[df_dia['Lugar'] == l].iloc[0]
+                            filas_hoy.append(fila)
+                            coords_ordenadas.append(fila['Coords_Procesadas'])
 
-                            df_ruta_hoy = pd.DataFrame(filas_hoy)
-                            ruta_nombre = ruta_maestra["nombre"]
-                            id_unico = f"{dia} - {ruta_nombre}"
-                            color_actual = colores[ruta_maestra["color_idx"] % len(colores)]
+                        df_ruta_hoy = pd.DataFrame(filas_hoy)
+                        ruta_nombre = ruta_maestra["nombre"]
+                        id_unico = f"{dia} - {ruta_nombre}"
+                        color_actual = colores[ruta_maestra["color_idx"] % len(colores)]
 
-                            geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
-                            if err_dirs:
-                                st.error(err_dirs)
-                                continue
+                        geojson, err_dirs = obtener_trazado_masivo(coords_ordenadas, headers)
+                        if err_dirs:
+                            st.error(err_dirs)
+                            continue
 
-                            props = geojson['features'][0]['properties']['summary']
-                            segments = geojson['features'][0]['properties'].get('segments', [])
+                        props = geojson['features'][0]['properties']['summary']
+                        segments = geojson['features'][0]['properties'].get('segments', [])
 
-                            paradas_info = []
-                            for _, row_hoy in df_ruta_hoy.iterrows():
-                                paradas_info.append({
-                                    "Día": row_hoy.get('Día',''), "Ruta": ruta_nombre,
-                                    "Departamento": row_hoy.get('Departamento',''), "Lugar": row_hoy.get('Lugar',''),
-                                    "Coordenadas": row_hoy.get('Coordenadas','')
-                                })
-
-                            datos_para_resumen.append({
-                                "id_unico": id_unico, "dia": dia, "ruta": ruta_nombre,
-                                "puntos": len(df_ruta_hoy), "dist_km": round(props['distance']/1000, 2),
-                                "drive_mins": round(props['duration']/60, 0), "color": color_actual,
-                                "paradas": paradas_info, "segmentos": segments,
-                                "geojson": geojson,
-                                "coords_ordenadas": coords_ordenadas
+                        paradas_info = []
+                        for _, row_hoy in df_ruta_hoy.iterrows():
+                            paradas_info.append({
+                                "Día": row_hoy.get('Día',''), "Ruta": ruta_nombre,
+                                "Departamento": row_hoy.get('Departamento',''), "Lugar": row_hoy.get('Lugar',''),
+                                "Coordenadas": row_hoy.get('Coordenadas','')
                             })
+
+                        datos_para_resumen.append({
+                            "id_unico": id_unico, "dia": dia, "ruta": ruta_nombre,
+                            "puntos": len(df_ruta_hoy), "dist_km": round(props['distance']/1000, 2),
+                            "drive_mins": round(props['duration']/60, 0), "color": color_actual,
+                            "paradas": paradas_info, "segmentos": segments,
+                            "geojson": geojson,
+                            "coords_ordenadas": coords_ordenadas
+                        })
 
                 st.session_state['datos_resumen'] = datos_para_resumen
                 st.session_state['calculo_terminado'] = True
@@ -1159,7 +1192,7 @@ if st.session_state.get('calculo_terminado', False):
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
                             waypoints_maps.append(f"{lat},{lon}")
-                            waypoints_ors.append(f"{lon},{lat}") 
+                            waypoints_ors.append(f"{lat},{lon}")
                         except Exception:
                             pass
                 
