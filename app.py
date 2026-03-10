@@ -260,11 +260,6 @@ else:
     # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL TOTALMENTE INTACTA)
     # ======================================================================
     else:
-        for col in ['Coordenadas', 'Día']:
-            if col not in df.columns:
-                st.error(f"❌ No se encontró la columna '{col}' en tu archivo Excel.")
-                st.stop()
-
         # BLINDAJE DE MEMORIA PARA EVITAR CUALQUIER NAMEERROR
         punto_final_vrp = ""
         hora_salida_vrp = datetime.time(8, 0)
@@ -387,10 +382,6 @@ else:
             st.session_state['hora_salida_rutas_dict'] = hora_salida_rutas_dict
             
             with st.spinner("Procesando la red logística y calculando tiempos..."):
-                lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
-                lon_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][0]
-                mapa_calculado = folium.Map(location=[lat_centro, lon_centro], zoom_start=11)
-                
                 colores = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'cadetblue', 'darkblue', 'pink', 'lightgreen']
                 datos_para_resumen = []
                 color_idx = 0
@@ -409,10 +400,6 @@ else:
                 # ==========================================================
                 if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"]:
                     for dia in dias_seleccionados:
-                        df_dia_general = df[df['Día'] == dia]
-                        if not df_dia_general.empty:
-                            dibujar_geozona_circular(df_dia_general['Coords_Procesadas'].tolist(), f"🌍 DÍA: {dia}", "black", mapa_calculado)
-
                         for ruta in rutas_seleccionadas:
                             df_ruta = df[(df['Día'] == dia) & (df['Ruta'] == ruta)].copy().reset_index(drop=True)
                             if df_ruta.empty: continue
@@ -422,8 +409,6 @@ else:
                             color_idx += 1
                             
                             lista_coords = df_ruta['Coords_Procesadas'].tolist()
-                            dibujar_geozona_circular(lista_coords, f"🗺️ {ruta}", color_actual, mapa_calculado)
-                            
                             nodos_ordenados = []
                             coords_ordenadas = []
 
@@ -542,7 +527,6 @@ else:
                         num_locs = len(lista_coords)
                         
                         if num_locs < 2: continue
-                        dibujar_geozona_circular(lista_coords, f"🌍 DÍA: {dia} (Zona)", "black", mapa_calculado)
 
                         matriz_dist, matriz_dur, err_matriz = obtener_matriz_masiva(lista_coords, headers)
                         if err_matriz == "QUOTA_EXCEEDED":
@@ -670,10 +654,6 @@ else:
                 elif tipo_ruteo == "Creación de rutas propias (Departamental Fijo)":
                     for dia in dias_seleccionados:
                         df_dia_completo = df[df['Día'] == dia].copy().reset_index(drop=True)
-                        lista_coords_dia = df_dia_completo['Coords_Procesadas'].tolist()
-                        if len(lista_coords_dia) > 1:
-                            dibujar_geozona_circular(lista_coords_dia, f"🌍 DÍA: {dia} (Zona Global)", "black", mapa_calculado)
-
                         dept_series = df_dia_completo[df_dia_completo['Lugar'] != punto_final_vrp]['Departamento']
                         departamentos = [d for d in dept_series.unique() if pd.notna(d) and str(d).strip() != '']
                         vehiculo_real_count = 1
@@ -1041,7 +1021,6 @@ if st.session_state.get('calculo_terminado', False):
     with tab_mapa:
         st.markdown("### Mapa de Recorridos")
         
-        # --- BOTONES NATIVOS DE STREAMLIT PARA APAGAR/PRENDER CAPAS ---
         opcion_capas = st.radio(
             "Visibilidad de las rutas:", 
             ["✅ Mostrar Todas las Rutas", "❌ Ocultar Todas las Rutas"], 
@@ -1170,7 +1149,8 @@ if st.session_state.get('calculo_terminado', False):
                 else:
                     minutos_demora_real = 0
                     
-                waypoints = []
+                waypoints_maps = []
+                waypoints_ors = []
                 for p in d['paradas']:
                     coord_raw = str(p.get('Coordenadas', ''))
                     partes = coord_raw.split(',')
@@ -1178,11 +1158,13 @@ if st.session_state.get('calculo_terminado', False):
                         try:
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
-                            waypoints.append(f"{lat},{lon}")
+                            waypoints_maps.append(f"{lat},{lon}")
+                            waypoints_ors.append(f"{lon},{lat}") 
                         except Exception:
                             pass
                 
-                enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints) if waypoints else ""
+                enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
+                enlace_ors = "https://maps.openrouteservice.org/directions?a=" + ",".join(waypoints_ors) + "&b=0&c=0&k1=es-ES&k2=km" if waypoints_ors else ""
                 
                 data_resumen_general.append({
                     "Día": d['dia'],
@@ -1191,7 +1173,8 @@ if st.session_state.get('calculo_terminado', False):
                     "Hs de Finalización": hora_llegada_final,
                     "Minutos de Demora": minutos_demora_real,
                     "Kms Recorridos": round(dist_acum, 2),
-                    "Link Google Maps": enlace_maps
+                    "Link Google Maps": enlace_maps,
+                    "Link ORS": enlace_ors
                 })
                 
                 with st.expander("Ver Cronograma Detallado"):
@@ -1214,7 +1197,8 @@ if st.session_state.get('calculo_terminado', False):
             df_resumen, 
             use_container_width=True,
             column_config={
-                "Link Google Maps": st.column_config.LinkColumn("🗺️ Ver en Google Maps", display_text="Abrir Ruta")
+                "Link Google Maps": st.column_config.LinkColumn("🗺️ G. Maps", display_text="Abrir Maps"),
+                "Link ORS": st.column_config.LinkColumn("🧭 ORS", display_text="Abrir ORS")
             }
         )
         
