@@ -1400,7 +1400,7 @@ if st.session_state.get('calculo_terminado', False):
                     minutos_demora_real = 0
                     
                 waypoints_maps = []
-                waypoints_ors_list = []
+                waypoints_ors = []
                 
                 for p in d['paradas']:
                     coord_raw = str(p.get('Coordenadas', ''))
@@ -1410,16 +1410,17 @@ if st.session_state.get('calculo_terminado', False):
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
                             
-                            # Google Maps Directo
+                            # Formato Oficial Google Maps
                             waypoints_maps.append(f"{lat},{lon}")
                             
-                            # ORS Clásico web URL (Requiere lat,lon para su parámetro 'a=')
-                            waypoints_ors_list.append(f"{lat},{lon}")
+                            # Formato Oficial ORS Clásico (Siempre Longitud, Latitud)
+                            waypoints_ors.append(f"{lon},{lat}")
                         except Exception:
                             pass
                 
+                # ENLACES CLÁSICOS E INFALIBLES Y LIMPIOS
                 enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
-                enlace_ors = "https://maps.openrouteservice.org/directions?a=" + ",".join(waypoints_ors_list) + "&b=0&c=0&k1=es-ES&k2=km" if waypoints_ors_list else ""
+                enlace_ors = "https://maps.openrouteservice.org/#/directions/" + "/".join(waypoints_ors) if waypoints_ors else ""
                 
                 data_resumen_general.append({
                     "Día": d['dia'],
