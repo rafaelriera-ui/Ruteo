@@ -295,6 +295,7 @@ else:
         hora_salida_vrp = datetime.time(8, 0)
         hora_llegada_vrp = datetime.time(14, 30)
         min_parada_vrp = 15
+        min_parada_global = 15
         
         st.sidebar.header("1. Filtro de Días")
         dias_disponibles = df['Día'].unique().tolist()
@@ -357,6 +358,8 @@ else:
             st.sidebar.markdown("---")
             st.sidebar.markdown("**📍 Configuración de Ruta**")
             
+            min_parada_global = st.sidebar.number_input("⏳ Minutos demora por parada:", min_value=0, value=15, step=1)
+            
             if tipo_ruteo == "Ruteo Optimizado (IA)":
                 st.sidebar.info("Elige la hora de salida. Puedes forzar el orden global de los últimos 4 puntos.")
             elif tipo_ruteo == "Ruteo Optimizado (IA) v2":
@@ -365,6 +368,7 @@ else:
             else:
                 st.sidebar.info("Elige la hora de salida para cada ruta.")
 
+            # --- LÓGICA V2 GLOBAL (LIMPIA DE LABNU EN PANTALLA) ---
             if tipo_ruteo == "Ruteo Optimizado (IA) v2" and usar_config_global_v2:
                 st.sidebar.markdown("**⚙️ Configuración Global (Aplica a todos los días)**")
                 for ruta in rutas_seleccionadas:
@@ -372,6 +376,7 @@ else:
                     if df_ruta_global.empty: continue
                     st.sidebar.markdown(f"**Ruta:** {ruta}")
                     
+                    # Filtramos LABNU del Inicio Global
                     lugares_lista_g = [loc for loc in df_ruta_global['Lugar'].unique().tolist() if str(df_ruta_global[df_ruta_global['Lugar']==loc]['Departamento'].iloc[0]).strip().upper() != 'LABNU']
                     opciones_lugar_g = ["🤖 IA Decide"] + lugares_lista_g
                     
@@ -385,11 +390,14 @@ else:
                         if pd.isna(dept) or str(dept).strip() == '': continue
                         dept_str = str(dept).strip()
                         
+                        # IGNORAMOS LABNU EN LA INTERFAZ VISUAL COMPLETAMENTE
                         if dept_str.upper() == 'LABNU': 
                             continue
                         
                         st.sidebar.markdown(f"🔹 *Depto: {dept_str}*")
                         l_dept_g = df_ruta_global[df_ruta_global['Departamento'] == dept]['Lugar'].unique().tolist()
+                        
+                        # Por seguridad, si algún lugar se coló con nombre LABNU, lo volamos de la lista
                         l_dept_g = [loc for loc in l_dept_g if str(loc).strip().upper() != 'LABNU']
                         opc_dept_g = ["🤖 IA Decide"] + l_dept_g
                         
@@ -404,6 +412,7 @@ else:
                 st.sidebar.markdown("---")
                 st.sidebar.markdown("**⏱️ Horarios de Salida por Día**")
 
+            # --- LÓGICA DÍA POR DÍA O ASIGNACIÓN DE HORARIOS ---
             for dia in dias_seleccionados:
                 for ruta in rutas_seleccionadas:
                     df_unicaruta = df_filtrado_dias[(df_filtrado_dias['Día'] == dia) & (df_filtrado_dias['Ruta'] == ruta)].reset_index(drop=True)
@@ -450,6 +459,7 @@ else:
                                         if pd.isna(dept) or str(dept).strip() == '': continue
                                         dept_str = str(dept).strip()
                                         
+                                        # IGNORAMOS LABNU EN LA INTERFAZ
                                         if dept_str.upper() == 'LABNU': 
                                             continue
                                             
@@ -509,7 +519,13 @@ else:
         # --- BOTÓN DE CÁLCULO ---
         if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
             st.session_state['hora_salida_rutas_dict'] = hora_salida_rutas_dict
+            st.session_state['tipo_ruteo'] = tipo_ruteo # <-- BLINDAJE EN MEMORIA
             
+            if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)", "Ruteo Optimizado (IA) v2"]:
+                st.session_state['min_parada_guardado'] = min_parada_global
+            else:
+                st.session_state['min_parada_guardado'] = min_parada_vrp
+                
             with st.spinner("Procesando la red logística y calculando tiempos..."):
                 
                 lat_centro = df_filtrado_dias.iloc[0]['Coords_Procesadas'][1]
@@ -684,9 +700,9 @@ else:
                                                     solver.Add(seq_dim.CumulVar(manager.NodeToIndex(node_before)) < seq_dim.CumulVar(manager.NodeToIndex(node_after)))
                                         
                                         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
                                         search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-                                        search_parameters.time_limit.seconds = 8 
+                                        search_parameters.time_limit.seconds = 5 
                                         
                                         solution = routing.SolveWithParameters(search_parameters)
                                         
@@ -699,7 +715,7 @@ else:
                                                 idx = solution.Value(routing.NextVar(idx))
                                             coords_ordenadas = [lista_coords[i] for i in nodos_ordenados]
                                         else:
-                                            st.error(f"No se encontró solución matemática para {ruta}. Revisa no haber puesto el mismo lugar como Inicio y Fin al mismo tiempo o crear un bucle imposible.")
+                                            st.error(f"No se encontró solución matemática para {ruta}. La IA de ruteo falló en esta secuencia.")
                                             continue
                                     else:
                                         st.error(f"Error Matriz en {ruta}: {err_matriz}")
@@ -1313,20 +1329,11 @@ if st.session_state.get('calculo_terminado', False):
                 c1, c2, c3 = st.columns([1.2, 1, 1])
                 
                 default_h = datetime.time(9,0)
-                default_wait = 15
+                default_wait = st.session_state.get('min_parada_guardado', 15)
                 
-                tipo_actual = st.session_state.get('tipo_ruteo', "Creación de rutas propias")
-                
-                if "Creación de rutas" in tipo_actual:
-                    try:
-                        default_h = hora_salida_vrp
-                        default_wait = min_parada_vrp
-                    except NameError:
-                        pass
-                else:
-                    dict_horas = st.session_state.get('hora_salida_rutas_dict', {})
-                    if d['id_unico'] in dict_horas:
-                        default_h = dict_horas[d['id_unico']]
+                dict_horas = st.session_state.get('hora_salida_rutas_dict', {})
+                if d['id_unico'] in dict_horas:
+                    default_h = dict_horas[d['id_unico']]
                 
                 h_inicio = c1.time_input("Salida", default_h, key=f"h_{d['id_unico']}")
                 espera = c2.number_input("Espera por parada (min)", 0, 300, default_wait, key=f"w_{d['id_unico']}")
@@ -1400,16 +1407,16 @@ if st.session_state.get('calculo_terminado', False):
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
                             
-                            # Google Maps pide Latitud, Longitud para su link directo
+                            # Formato Oficial Google Maps (Directo al GPS del celular)
                             waypoints_maps.append(f"{lat},{lon}")
                             
-                            # ORS pide Longitud, Latitud para su link clásico
+                            # Formato Oficial ORS Clásico (Siempre Longitud, Latitud)
                             waypoints_ors.append(f"{lon},{lat}")
                         except Exception:
                             pass
                 
                 # ENLACES CLÁSICOS E INFALIBLES
-                enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
+                enlace_maps = "http://googleusercontent.com/maps.google.com/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
                 enlace_ors = "https://maps.openrouteservice.org/directions?a=" + ",".join(waypoints_ors) + "&b=0&c=0&k1=es-ES&k2=km" if waypoints_ors else ""
                 
                 data_resumen_general.append({
