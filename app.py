@@ -47,6 +47,7 @@ function toggleFoliumLayers(turnOn, e) {
     });
 }
 
+// Bloquea los clics para que no se arrastre el mapa por accidente al tocar los botones
 var panel = document.getElementById('panel-botones-capas');
 if(panel) {
     panel.addEventListener('mousedown', function(e){ e.stopPropagation(); });
@@ -288,10 +289,10 @@ else:
                 st.session_state['calculo_terminado'] = True
 
     # ======================================================================
-    # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL + NUEVA OPCIÓN v2)
+    # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL TOTALMENTE INTACTA)
     # ======================================================================
     else:
-        # BLINDAJE DE MEMORIA PARA EVITAR CUALQUIER NAMEERROR
+        # BLINDAJE DE MEMORIA
         punto_final_vrp = ""
         hora_salida_vrp = datetime.time(8, 0)
         hora_llegada_vrp = datetime.time(14, 30)
@@ -314,7 +315,6 @@ else:
         st.sidebar.markdown("---")
         st.sidebar.header("2. Estrategia de Ruteo")
 
-        # NUEVA OPCIÓN AGREGADA AL MENÚ
         tipo_ruteo = st.sidebar.radio(
             "Selecciona cómo armar las rutas:",
             [
@@ -335,7 +335,7 @@ else:
         opciones_antepenultimo_dict = {}
         opciones_penultimo_dict = {}
         opciones_fin_dict = {}
-        opciones_deptos_dict = {} # Exclusivo para la v2
+        opciones_deptos_dict = {}
         hora_salida_rutas_dict = {}  
         rutas_seleccionadas = []
 
@@ -358,7 +358,7 @@ else:
             if tipo_ruteo == "Ruteo Optimizado (IA)":
                 st.sidebar.info("Elige la hora de salida. Puedes forzar el orden global de los últimos 4 puntos.")
             elif tipo_ruteo == "Ruteo Optimizado (IA) v2":
-                st.sidebar.info("Elige la hora de salida y el orden de los últimos puntos ESPECÍFICO por cada Departamento.")
+                st.sidebar.info("Elige la hora de salida y el orden de los últimos puntos ESPECÍFICO por cada Departamento. Puedes cruzar departamentos libremente.")
             else:
                 st.sidebar.info("Elige la hora de salida para cada ruta.")
                 
@@ -394,12 +394,22 @@ else:
                                 deptos_lista = df_unicaruta['Departamento'].unique().tolist()
                                 opciones_deptos_dict[id_ruta] = {}
                                 
+                                # BUSCAMOS TODOS LOS LUGARES DE LABNU PARA INYECTARLOS
+                                lugares_labnu = df_unicaruta[df_unicaruta['Departamento'].astype(str).str.strip().str.upper() == 'LABNU']['Lugar'].tolist()
+                                
                                 for dept in deptos_lista:
                                     if pd.isna(dept) or str(dept).strip() == '': continue
                                     dept_str = str(dept).strip()
                                     st.sidebar.markdown(f"🔹 *Depto: {dept_str}*")
                                     
                                     l_dept = df_unicaruta[df_unicaruta['Departamento'] == dept]['Lugar'].tolist()
+                                    
+                                    # MAGIA: Inyectamos los lugares de LABNU en los demás departamentos
+                                    if dept_str.upper() != 'LABNU':
+                                        for loc in lugares_labnu:
+                                            if loc not in l_dept:
+                                                l_dept.append(loc)
+                                                
                                     opc_dept = ["🤖 IA Decide"] + l_dept
                                     
                                     sel_aa = st.sidebar.selectbox("Ante-antepenúltimo:", opc_dept, index=0, key=f"aa_{id_ruta}_{dept_str}")
@@ -464,7 +474,6 @@ else:
                 color_idx = 0
                 headers = {'Authorization': api_key, 'Content-Type': 'application/json'}
 
-                # Aseguramos que destino_row_global exista siempre en memoria si es necesario
                 destino_row_global = None
                 if "Creación de rutas propias" in tipo_ruteo:
                     try:
@@ -1097,6 +1106,7 @@ else:
                             if best_r != -1:
                                 rutas_core_locs[best_r].insert(best_pos, f_loc)
                             else:
+                                # Si es físicamente imposible meterlo en los autos existentes con +10 min, abre auto nuevo.
                                 rutas_core_locs.append([f_loc])
                                 
                         for r in rutas_core_locs:
