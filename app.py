@@ -291,7 +291,6 @@ else:
     # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL + NUEVA OPCIÓN v2)
     # ======================================================================
     else:
-        # BLINDAJE DE MEMORIA 
         punto_final_vrp = ""
         hora_salida_vrp = datetime.time(8, 0)
         hora_llegada_vrp = datetime.time(14, 30)
@@ -361,12 +360,12 @@ else:
             if tipo_ruteo == "Ruteo Optimizado (IA)":
                 st.sidebar.info("Elige la hora de salida. Puedes forzar el orden global de los últimos 4 puntos.")
             elif tipo_ruteo == "Ruteo Optimizado (IA) v2":
-                st.sidebar.info("Elige la hora de salida y el orden de los últimos puntos ESPECÍFICO por cada Departamento.")
+                st.sidebar.info("Elige la hora de salida y el orden de los últimos puntos ESPECÍFICO por cada Departamento. Si existe LABNU en la ruta, se usará automáticamente como el cierre final sin que tengas que seleccionarlo.")
                 usar_config_global_v2 = st.sidebar.checkbox("✔️ Usar la misma configuración de cierre para TODOS los días", value=True)
             else:
                 st.sidebar.info("Elige la hora de salida para cada ruta.")
 
-            # --- NUEVA LÓGICA V2 GLOBAL ---
+            # --- LÓGICA V2 GLOBAL (LIMPIA DE LABNU EN PANTALLA) ---
             if tipo_ruteo == "Ruteo Optimizado (IA) v2" and usar_config_global_v2:
                 st.sidebar.markdown("**⚙️ Configuración Global (Aplica a todos los días)**")
                 for ruta in rutas_seleccionadas:
@@ -374,7 +373,8 @@ else:
                     if df_ruta_global.empty: continue
                     st.sidebar.markdown(f"**Ruta:** {ruta}")
                     
-                    lugares_lista_g = df_ruta_global['Lugar'].unique().tolist()
+                    # Filtramos LABNU del Inicio Global
+                    lugares_lista_g = [loc for loc in df_ruta_global['Lugar'].unique().tolist() if str(df_ruta_global[df_ruta_global['Lugar']==loc]['Departamento'].iloc[0]).strip().upper() != 'LABNU']
                     opciones_lugar_g = ["🤖 IA Decide"] + lugares_lista_g
                     
                     sel_ini_g = st.sidebar.selectbox("Inicio Global:", opciones_lugar_g, index=0, key=f"ini_g_{ruta}")
@@ -383,20 +383,19 @@ else:
                     deptos_lista_g = df_ruta_global['Departamento'].unique().tolist()
                     opciones_deptos_dict_global[ruta] = {}
                     
-                    lugares_labnu_g = df_ruta_global[df_ruta_global['Departamento'].astype(str).str.strip().str.upper() == 'LABNU']['Lugar'].unique().tolist()
-                    
                     for dept in deptos_lista_g:
                         if pd.isna(dept) or str(dept).strip() == '': continue
                         dept_str = str(dept).strip()
-                        if dept_str.upper() == 'LABNU': continue
+                        
+                        # IGNORAMOS LABNU EN LA INTERFAZ VISUAL COMPLETAMENTE
+                        if dept_str.upper() == 'LABNU': 
+                            continue
                         
                         st.sidebar.markdown(f"🔹 *Depto: {dept_str}*")
                         l_dept_g = df_ruta_global[df_ruta_global['Departamento'] == dept]['Lugar'].unique().tolist()
                         
-                        for loc in lugares_labnu_g:
-                            if loc not in l_dept_g:
-                                l_dept_g.append(loc)
-                                
+                        # Por seguridad, si algún lugar se coló con nombre LABNU, lo volamos de la lista
+                        l_dept_g = [loc for loc in l_dept_g if str(loc).strip().upper() != 'LABNU']
                         opc_dept_g = ["🤖 IA Decide"] + l_dept_g
                         
                         sel_aa_g = st.sidebar.selectbox("Ante-antepenúltimo:", opc_dept_g, index=0, key=f"aa_g_{ruta}_{dept_str}")
@@ -441,34 +440,30 @@ else:
                                 
                             elif tipo_ruteo == "Ruteo Optimizado (IA) v2":
                                 if usar_config_global_v2:
-                                    # Aplicamos silenciosamente lo que guardó en el modo Global
                                     opciones_inicio_dict[id_ruta] = opciones_inicio_global.get(ruta, "🤖 IA Decide")
                                     opciones_deptos_dict[id_ruta] = opciones_deptos_dict_global.get(ruta, {})
                                 else:
-                                    opciones_lugar = ["🤖 IA Decide"] + lugares_lista
+                                    lugares_lista_limpia = [loc for loc in df_unicaruta['Lugar'].tolist() if str(df_unicaruta[df_unicaruta['Lugar']==loc]['Departamento'].iloc[0]).strip().upper() != 'LABNU']
+                                    opciones_lugar = ["🤖 IA Decide"] + lugares_lista_limpia
+                                    
                                     sel_ini = st.sidebar.selectbox("Inicio Global:", opciones_lugar, index=0, key=f"ini_v2_{id_ruta}")
                                     opciones_inicio_dict[id_ruta] = sel_ini
                                     
                                     deptos_lista = df_unicaruta['Departamento'].unique().tolist()
                                     opciones_deptos_dict[id_ruta] = {}
                                     
-                                    lugares_labnu = df_unicaruta[df_unicaruta['Departamento'].astype(str).str.strip().str.upper() == 'LABNU']['Lugar'].tolist()
-                                    
                                     for dept in deptos_lista:
                                         if pd.isna(dept) or str(dept).strip() == '': continue
                                         dept_str = str(dept).strip()
                                         
+                                        # IGNORAMOS LABNU EN LA INTERFAZ
                                         if dept_str.upper() == 'LABNU': 
                                             continue
                                             
                                         st.sidebar.markdown(f"🔹 *Depto: {dept_str}*")
                                         l_dept = df_unicaruta[df_unicaruta['Departamento'] == dept]['Lugar'].tolist()
+                                        l_dept = [loc for loc in l_dept if str(loc).strip().upper() != 'LABNU']
                                         
-                                        if dept_str.upper() != 'LABNU':
-                                            for loc in lugares_labnu:
-                                                if loc not in l_dept:
-                                                    l_dept.append(loc)
-                                                    
                                         opc_dept = ["🤖 IA Decide"] + l_dept
                                         
                                         sel_aa = st.sidebar.selectbox("Ante-antepenúltimo:", opc_dept, index=0, key=f"aa_{id_ruta}_{dept_str}")
@@ -587,7 +582,6 @@ else:
                                         sel_inicio = opciones_inicio_dict.get(id_unico, "🤖 IA Decide")
                                         lugares_actuales = df_ruta['Lugar'].tolist()
                                         
-                                        # Busqueda Robusta de Index
                                         idx_inicio = lugares_actuales.index(sel_inicio) if sel_inicio in lugares_actuales and sel_inicio != "🤖 IA Decide" else -1
                                         
                                         if idx_inicio != -1:
@@ -657,7 +651,6 @@ else:
                                         transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                                         routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                                         
-                                        # --- REGLA MÁGICA DE POSICIONES PARA LA V2 ---
                                         if tipo_ruteo == "Ruteo Optimizado (IA) v2":
                                             def sequence_callback(from_index):
                                                 return 1
@@ -1174,7 +1167,6 @@ else:
                             if best_r != -1:
                                 rutas_core_locs[best_r].insert(best_pos, f_loc)
                             else:
-                                # Si es físicamente imposible meterlo en los autos existentes con +10 min, abre auto nuevo.
                                 rutas_core_locs.append([f_loc])
                                 
                         for r in rutas_core_locs:
