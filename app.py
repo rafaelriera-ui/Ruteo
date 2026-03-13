@@ -291,7 +291,7 @@ else:
     # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL + NUEVA OPCIÓN v2)
     # ======================================================================
     else:
-        # BLINDAJE DE MEMORIA
+        # BLINDAJE DE MEMORIA 
         punto_final_vrp = ""
         hora_salida_vrp = datetime.time(8, 0)
         hora_llegada_vrp = datetime.time(14, 30)
@@ -329,6 +329,10 @@ else:
             ]
         )
 
+        usar_config_global_v2 = False
+        opciones_inicio_global = {}
+        opciones_deptos_dict_global = {}
+        
         opciones_inicio_dict = {}
         opciones_anteante_dict = {} 
         opciones_antepenultimo_dict = {}
@@ -357,17 +361,67 @@ else:
             if tipo_ruteo == "Ruteo Optimizado (IA)":
                 st.sidebar.info("Elige la hora de salida. Puedes forzar el orden global de los últimos 4 puntos.")
             elif tipo_ruteo == "Ruteo Optimizado (IA) v2":
-                st.sidebar.info("Elige la hora de salida y el orden de los últimos puntos ESPECÍFICO por cada Departamento. El sistema forzará automáticamente que todas las rutas terminen en LABNU si existe en tu listado.")
+                st.sidebar.info("Elige la hora de salida y el orden de los últimos puntos ESPECÍFICO por cada Departamento.")
+                usar_config_global_v2 = st.sidebar.checkbox("✔️ Usar la misma configuración de cierre para TODOS los días", value=True)
             else:
                 st.sidebar.info("Elige la hora de salida para cada ruta.")
-                
+
+            # --- NUEVA LÓGICA V2 GLOBAL ---
+            if tipo_ruteo == "Ruteo Optimizado (IA) v2" and usar_config_global_v2:
+                st.sidebar.markdown("**⚙️ Configuración Global (Aplica a todos los días)**")
+                for ruta in rutas_seleccionadas:
+                    df_ruta_global = df_filtrado_dias[df_filtrado_dias['Ruta'] == ruta].reset_index(drop=True)
+                    if df_ruta_global.empty: continue
+                    st.sidebar.markdown(f"**Ruta:** {ruta}")
+                    
+                    lugares_lista_g = df_ruta_global['Lugar'].unique().tolist()
+                    opciones_lugar_g = ["🤖 IA Decide"] + lugares_lista_g
+                    
+                    sel_ini_g = st.sidebar.selectbox("Inicio Global:", opciones_lugar_g, index=0, key=f"ini_g_{ruta}")
+                    opciones_inicio_global[ruta] = sel_ini_g
+                    
+                    deptos_lista_g = df_ruta_global['Departamento'].unique().tolist()
+                    opciones_deptos_dict_global[ruta] = {}
+                    
+                    lugares_labnu_g = df_ruta_global[df_ruta_global['Departamento'].astype(str).str.strip().str.upper() == 'LABNU']['Lugar'].unique().tolist()
+                    
+                    for dept in deptos_lista_g:
+                        if pd.isna(dept) or str(dept).strip() == '': continue
+                        dept_str = str(dept).strip()
+                        if dept_str.upper() == 'LABNU': continue
+                        
+                        st.sidebar.markdown(f"🔹 *Depto: {dept_str}*")
+                        l_dept_g = df_ruta_global[df_ruta_global['Departamento'] == dept]['Lugar'].unique().tolist()
+                        
+                        for loc in lugares_labnu_g:
+                            if loc not in l_dept_g:
+                                l_dept_g.append(loc)
+                                
+                        opc_dept_g = ["🤖 IA Decide"] + l_dept_g
+                        
+                        sel_aa_g = st.sidebar.selectbox("Ante-antepenúltimo:", opc_dept_g, index=0, key=f"aa_g_{ruta}_{dept_str}")
+                        sel_a_g = st.sidebar.selectbox("Antepenúltimo:", opc_dept_g, index=0, key=f"a_g_{ruta}_{dept_str}")
+                        sel_p_g = st.sidebar.selectbox("Penúltimo:", opc_dept_g, index=0, key=f"p_g_{ruta}_{dept_str}")
+                        sel_f_g = st.sidebar.selectbox("Último:", opc_dept_g, index=0, key=f"f_g_{ruta}_{dept_str}")
+                        
+                        opciones_deptos_dict_global[ruta][dept_str] = {
+                            'aa': sel_aa_g, 'a': sel_a_g, 'p': sel_p_g, 'f': sel_f_g
+                        }
+                st.sidebar.markdown("---")
+                st.sidebar.markdown("**⏱️ Horarios de Salida por Día**")
+
+            # --- LÓGICA DÍA POR DÍA O ASIGNACIÓN DE HORARIOS ---
             for dia in dias_seleccionados:
                 for ruta in rutas_seleccionadas:
                     df_unicaruta = df_filtrado_dias[(df_filtrado_dias['Día'] == dia) & (df_filtrado_dias['Ruta'] == ruta)].reset_index(drop=True)
                     if not df_unicaruta.empty:
                             lugares_lista = df_unicaruta['Lugar'].tolist()
                             id_ruta = f"{dia} - {ruta}"
-                            st.sidebar.markdown(f"**Ruta:** {id_ruta}")
+                            
+                            if tipo_ruteo == "Ruteo Optimizado (IA) v2" and usar_config_global_v2:
+                                st.sidebar.markdown(f"**Día/Ruta:** {id_ruta}")
+                            else:
+                                st.sidebar.markdown(f"**Ruta:** {id_ruta}")
                             
                             hora_salida_rutas_dict[id_ruta] = st.sidebar.time_input("Hora Salida:", datetime.time(9, 0), key=f"hora_{id_ruta}")
                             
@@ -386,33 +440,45 @@ else:
                                 opciones_fin_dict[id_ruta] = sel_fin
                                 
                             elif tipo_ruteo == "Ruteo Optimizado (IA) v2":
-                                opciones_lugar = ["🤖 IA Decide"] + lugares_lista
-                                sel_ini = st.sidebar.selectbox("Inicio Global:", opciones_lugar, index=0, key=f"ini_v2_{id_ruta}")
-                                opciones_inicio_dict[id_ruta] = sel_ini
-                                
-                                deptos_lista = df_unicaruta['Departamento'].unique().tolist()
-                                opciones_deptos_dict[id_ruta] = {}
-                                
-                                for dept in deptos_lista:
-                                    if pd.isna(dept) or str(dept).strip() == '': continue
-                                    dept_str = str(dept).strip()
+                                if usar_config_global_v2:
+                                    # Aplicamos silenciosamente lo que guardó en el modo Global
+                                    opciones_inicio_dict[id_ruta] = opciones_inicio_global.get(ruta, "🤖 IA Decide")
+                                    opciones_deptos_dict[id_ruta] = opciones_deptos_dict_global.get(ruta, {})
+                                else:
+                                    opciones_lugar = ["🤖 IA Decide"] + lugares_lista
+                                    sel_ini = st.sidebar.selectbox("Inicio Global:", opciones_lugar, index=0, key=f"ini_v2_{id_ruta}")
+                                    opciones_inicio_dict[id_ruta] = sel_ini
                                     
-                                    # MAGIA: Ocultamos LABNU de la configuración visual del usuario
-                                    if dept_str.upper() == 'LABNU': 
-                                        continue
+                                    deptos_lista = df_unicaruta['Departamento'].unique().tolist()
+                                    opciones_deptos_dict[id_ruta] = {}
+                                    
+                                    lugares_labnu = df_unicaruta[df_unicaruta['Departamento'].astype(str).str.strip().str.upper() == 'LABNU']['Lugar'].tolist()
+                                    
+                                    for dept in deptos_lista:
+                                        if pd.isna(dept) or str(dept).strip() == '': continue
+                                        dept_str = str(dept).strip()
                                         
-                                    st.sidebar.markdown(f"🔹 *Depto: {dept_str}*")
-                                    l_dept = df_unicaruta[df_unicaruta['Departamento'] == dept]['Lugar'].tolist()
-                                    opc_dept = ["🤖 IA Decide"] + l_dept
-                                    
-                                    sel_aa = st.sidebar.selectbox("Ante-antepenúltimo:", opc_dept, index=0, key=f"aa_{id_ruta}_{dept_str}")
-                                    sel_a = st.sidebar.selectbox("Antepenúltimo:", opc_dept, index=0, key=f"a_{id_ruta}_{dept_str}")
-                                    sel_p = st.sidebar.selectbox("Penúltimo:", opc_dept, index=0, key=f"p_{id_ruta}_{dept_str}")
-                                    sel_f = st.sidebar.selectbox("Último:", opc_dept, index=0, key=f"f_{id_ruta}_{dept_str}")
-                                    
-                                    opciones_deptos_dict[id_ruta][dept_str] = {
-                                        'aa': sel_aa, 'a': sel_a, 'p': sel_p, 'f': sel_f
-                                    }
+                                        if dept_str.upper() == 'LABNU': 
+                                            continue
+                                            
+                                        st.sidebar.markdown(f"🔹 *Depto: {dept_str}*")
+                                        l_dept = df_unicaruta[df_unicaruta['Departamento'] == dept]['Lugar'].tolist()
+                                        
+                                        if dept_str.upper() != 'LABNU':
+                                            for loc in lugares_labnu:
+                                                if loc not in l_dept:
+                                                    l_dept.append(loc)
+                                                    
+                                        opc_dept = ["🤖 IA Decide"] + l_dept
+                                        
+                                        sel_aa = st.sidebar.selectbox("Ante-antepenúltimo:", opc_dept, index=0, key=f"aa_{id_ruta}_{dept_str}")
+                                        sel_a = st.sidebar.selectbox("Antepenúltimo:", opc_dept, index=0, key=f"a_{id_ruta}_{dept_str}")
+                                        sel_p = st.sidebar.selectbox("Penúltimo:", opc_dept, index=0, key=f"p_{id_ruta}_{dept_str}")
+                                        sel_f = st.sidebar.selectbox("Último:", opc_dept, index=0, key=f"f_{id_ruta}_{dept_str}")
+                                        
+                                        opciones_deptos_dict[id_ruta][dept_str] = {
+                                            'aa': sel_aa, 'a': sel_a, 'p': sel_p, 'f': sel_f
+                                        }
                                 
                             st.sidebar.markdown("<br>", unsafe_allow_html=True)
 
@@ -520,7 +586,9 @@ else:
                                                 
                                         sel_inicio = opciones_inicio_dict.get(id_unico, "🤖 IA Decide")
                                         lugares_actuales = df_ruta['Lugar'].tolist()
-                                        idx_inicio = lugares_actuales.index(sel_inicio) if sel_inicio != "🤖 IA Decide" else -1
+                                        
+                                        # Busqueda Robusta de Index
+                                        idx_inicio = lugares_actuales.index(sel_inicio) if sel_inicio in lugares_actuales and sel_inicio != "🤖 IA Decide" else -1
                                         
                                         if idx_inicio != -1:
                                             for j in range(N): extended_dist[N][j] = 99999999
@@ -534,10 +602,10 @@ else:
                                             sel_pen = opciones_penultimo_dict.get(id_unico, "🤖 IA Decide")
                                             sel_fin = opciones_fin_dict.get(id_unico, "🤖 IA Decide")
                                             
-                                            idx_anteante = lugares_actuales.index(sel_anteante) if sel_anteante != "🤖 IA Decide" else -1
-                                            idx_ante = lugares_actuales.index(sel_ante) if sel_ante != "🤖 IA Decide" else -1
-                                            idx_pen = lugares_actuales.index(sel_pen) if sel_pen != "🤖 IA Decide" else -1
-                                            idx_fin = lugares_actuales.index(sel_fin) if sel_fin != "🤖 IA Decide" else -1
+                                            idx_anteante = lugares_actuales.index(sel_anteante) if sel_anteante in lugares_actuales and sel_anteante != "🤖 IA Decide" else -1
+                                            idx_ante = lugares_actuales.index(sel_ante) if sel_ante in lugares_actuales and sel_ante != "🤖 IA Decide" else -1
+                                            idx_pen = lugares_actuales.index(sel_pen) if sel_pen in lugares_actuales and sel_pen != "🤖 IA Decide" else -1
+                                            idx_fin = lugares_actuales.index(sel_fin) if sel_fin in lugares_actuales and sel_fin != "🤖 IA Decide" else -1
                                             
                                             if idx_fin != -1:
                                                 for i in range(N): extended_dist[i][N+1] = 99999999
@@ -564,7 +632,7 @@ else:
                                                     if i != idx_anteante: extended_dist[i][idx_ante] = 99999999
                                                     
                                         elif tipo_ruteo == "Ruteo Optimizado (IA) v2":
-                                            # MAGIA: Buscamos dónde está LABNU en esta ruta específica
+                                            # Buscamos LABNU y lo forzamos al final absoluto global de forma silenciosa
                                             deptos_actuales = df_ruta['Departamento'].tolist()
                                             idx_labnu = -1
                                             for idx_loc, depto_val in enumerate(deptos_actuales):
@@ -572,7 +640,6 @@ else:
                                                     idx_labnu = idx_loc
                                                     break
                                             
-                                            # Si hay LABNU, se fuerza como punto de cierre final y absoluto
                                             if idx_labnu != -1:
                                                 for i in range(N): extended_dist[i][N+1] = 99999999
                                                 extended_dist[idx_labnu][N+1] = 0
@@ -590,6 +657,7 @@ else:
                                         transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                                         routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                                         
+                                        # --- REGLA MÁGICA DE POSICIONES PARA LA V2 ---
                                         if tipo_ruteo == "Ruteo Optimizado (IA) v2":
                                             def sequence_callback(from_index):
                                                 return 1
@@ -607,10 +675,10 @@ else:
                                                 sel_p = config['p']
                                                 sel_f = config['f']
                                                 
-                                                idx_aa = lugares_actuales.index(sel_aa) if sel_aa != "🤖 IA Decide" else -1
-                                                idx_a = lugares_actuales.index(sel_a) if sel_a != "🤖 IA Decide" else -1
-                                                idx_p = lugares_actuales.index(sel_p) if sel_p != "🤖 IA Decide" else -1
-                                                idx_f = lugares_actuales.index(sel_f) if sel_f != "🤖 IA Decide" else -1
+                                                idx_aa = lugares_actuales.index(sel_aa) if sel_aa in lugares_actuales and sel_aa != "🤖 IA Decide" else -1
+                                                idx_a = lugares_actuales.index(sel_a) if sel_a in lugares_actuales and sel_a != "🤖 IA Decide" else -1
+                                                idx_p = lugares_actuales.index(sel_p) if sel_p in lugares_actuales and sel_p != "🤖 IA Decide" else -1
+                                                idx_f = lugares_actuales.index(sel_f) if sel_f in lugares_actuales and sel_f != "🤖 IA Decide" else -1
                                                 
                                                 target_last_nodes = []
                                                 for x in [idx_aa, idx_a, idx_p, idx_f]:
