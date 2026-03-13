@@ -11,6 +11,7 @@ import datetime
 import re
 import time 
 import urllib.parse
+import openpyxl 
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Gestor de Rutas Logísticas", layout="wide")
@@ -287,7 +288,7 @@ else:
                 st.session_state['calculo_terminado'] = True
 
     # ======================================================================
-    # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL TOTALMENTE INTACTA)
+    # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL + NUEVA OPCIÓN v2)
     # ======================================================================
     else:
         # BLINDAJE DE MEMORIA PARA EVITAR CUALQUIER NAMEERROR
@@ -313,11 +314,13 @@ else:
         st.sidebar.markdown("---")
         st.sidebar.header("2. Estrategia de Ruteo")
 
+        # NUEVA OPCIÓN AGREGADA AL MENÚ
         tipo_ruteo = st.sidebar.radio(
             "Selecciona cómo armar las rutas:",
             [
                 "Ruteo según Excel (Orden Original)", 
                 "Ruteo Optimizado (IA)", 
+                "Ruteo Optimizado (IA) v2",
                 "Creación de rutas propias (Ideal Libre)",
                 "Creación de rutas propias (Departamental Flexible)",
                 "Creación de rutas propias (Departamental Fijo)",
@@ -328,11 +331,15 @@ else:
         )
 
         opciones_inicio_dict = {}
+        opciones_anteante_dict = {} 
+        opciones_antepenultimo_dict = {}
+        opciones_penultimo_dict = {}
         opciones_fin_dict = {}
+        opciones_deptos_dict = {} # Exclusivo para la v2
         hora_salida_rutas_dict = {}  
         rutas_seleccionadas = []
 
-        if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"]:
+        if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)", "Ruteo Optimizado (IA) v2"]:
             st.sidebar.markdown("**Filtro de Rutas**")
             rutas_disponibles = df_filtrado_dias['Ruta'].unique().tolist()
             todas_rutas = st.sidebar.checkbox("✔️ Todas las Rutas", value=True)
@@ -347,8 +354,11 @@ else:
                 
             st.sidebar.markdown("---")
             st.sidebar.markdown("**📍 Configuración de Ruta**")
+            
             if tipo_ruteo == "Ruteo Optimizado (IA)":
-                st.sidebar.info("Elige la hora de salida, y dónde empezar y terminar (la IA buscará la opción más rápida si se lo permites).")
+                st.sidebar.info("Elige la hora de salida. Puedes forzar el orden global de los últimos 4 puntos.")
+            elif tipo_ruteo == "Ruteo Optimizado (IA) v2":
+                st.sidebar.info("Elige la hora de salida y el orden de los últimos puntos ESPECÍFICO por cada Departamento.")
             else:
                 st.sidebar.info("Elige la hora de salida para cada ruta.")
                 
@@ -365,9 +375,41 @@ else:
                             if tipo_ruteo == "Ruteo Optimizado (IA)":
                                 opciones_lugar = ["🤖 IA Decide"] + lugares_lista
                                 sel_ini = st.sidebar.selectbox("Punto de Inicio:", opciones_lugar, index=0, key=f"ini_{id_ruta}")
+                                sel_anteante = st.sidebar.selectbox("Punto Ante-antepenúltimo:", opciones_lugar, index=0, key=f"anteante_{id_ruta}")
+                                sel_ante = st.sidebar.selectbox("Punto Antepenúltimo:", opciones_lugar, index=0, key=f"ante_{id_ruta}")
+                                sel_pen = st.sidebar.selectbox("Punto Penúltimo:", opciones_lugar, index=0, key=f"pen_{id_ruta}")
                                 sel_fin = st.sidebar.selectbox("Punto Final:", opciones_lugar, index=len(opciones_lugar)-1, key=f"fin_{id_ruta}")
+                                
                                 opciones_inicio_dict[id_ruta] = sel_ini
+                                opciones_anteante_dict[id_ruta] = sel_anteante
+                                opciones_antepenultimo_dict[id_ruta] = sel_ante
+                                opciones_penultimo_dict[id_ruta] = sel_pen
                                 opciones_fin_dict[id_ruta] = sel_fin
+                                
+                            elif tipo_ruteo == "Ruteo Optimizado (IA) v2":
+                                opciones_lugar = ["🤖 IA Decide"] + lugares_lista
+                                sel_ini = st.sidebar.selectbox("Inicio Global:", opciones_lugar, index=0, key=f"ini_v2_{id_ruta}")
+                                opciones_inicio_dict[id_ruta] = sel_ini
+                                
+                                deptos_lista = df_unicaruta['Departamento'].unique().tolist()
+                                opciones_deptos_dict[id_ruta] = {}
+                                
+                                for dept in deptos_lista:
+                                    if pd.isna(dept) or str(dept).strip() == '': continue
+                                    dept_str = str(dept).strip()
+                                    st.sidebar.markdown(f"🔹 *Depto: {dept_str}*")
+                                    
+                                    l_dept = df_unicaruta[df_unicaruta['Departamento'] == dept]['Lugar'].tolist()
+                                    opc_dept = ["🤖 IA Decide"] + l_dept
+                                    
+                                    sel_aa = st.sidebar.selectbox("Ante-antepenúltimo:", opc_dept, index=0, key=f"aa_{id_ruta}_{dept_str}")
+                                    sel_a = st.sidebar.selectbox("Antepenúltimo:", opc_dept, index=0, key=f"a_{id_ruta}_{dept_str}")
+                                    sel_p = st.sidebar.selectbox("Penúltimo:", opc_dept, index=0, key=f"p_{id_ruta}_{dept_str}")
+                                    sel_f = st.sidebar.selectbox("Último:", opc_dept, index=0, key=f"f_{id_ruta}_{dept_str}")
+                                    
+                                    opciones_deptos_dict[id_ruta][dept_str] = {
+                                        'aa': sel_aa, 'a': sel_a, 'p': sel_p, 'f': sel_f
+                                    }
                                 
                             st.sidebar.markdown("<br>", unsafe_allow_html=True)
 
@@ -431,9 +473,9 @@ else:
                         destino_row_global = df[df['Lugar'] == punto_final_vrp].iloc[0]
 
                 # ==========================================================
-                # LÓGICA 1 Y 2: RUTEO CLÁSICO Y OPTIMIZADO
+                # LÓGICA 1 Y 2: RUTEO CLÁSICO Y OPTIMIZADOS
                 # ==========================================================
-                if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)"]:
+                if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)", "Ruteo Optimizado (IA) v2"]:
                     for dia in dias_seleccionados:
                         df_dia_general = df[df['Día'] == dia]
                         if not df_dia_general.empty:
@@ -448,8 +490,6 @@ else:
                             color_idx += 1
                             
                             lista_coords = df_ruta['Coords_Procesadas'].tolist()
-                            dibujar_geozona_circular(lista_coords, f"🗺️ {ruta}", color_actual, mapa_calculado)
-                            
                             nodos_ordenados = []
                             coords_ordenadas = []
 
@@ -477,20 +517,54 @@ else:
                                                 extended_dist[i][j] = int(val) if val is not None else 99999999
                                                 
                                         sel_inicio = opciones_inicio_dict.get(id_unico, "🤖 IA Decide")
-                                        if sel_inicio == "🤖 IA Decide":
-                                            for j in range(N): extended_dist[N][j] = 0
-                                        else:
-                                            idx_inicio = df_ruta['Lugar'].tolist().index(sel_inicio)
+                                        lugares_actuales = df_ruta['Lugar'].tolist()
+                                        idx_inicio = lugares_actuales.index(sel_inicio) if sel_inicio != "🤖 IA Decide" else -1
+                                        
+                                        if idx_inicio != -1:
                                             for j in range(N): extended_dist[N][j] = 99999999
                                             extended_dist[N][idx_inicio] = 0
-                                            
-                                        sel_fin = opciones_fin_dict.get(id_unico, "🤖 IA Decide")
-                                        if sel_fin == "🤖 IA Decide":
-                                            for i in range(N): extended_dist[i][N+1] = 0
                                         else:
-                                            idx_fin = df_ruta['Lugar'].tolist().index(sel_fin)
-                                            for i in range(N): extended_dist[i][N+1] = 99999999
-                                            extended_dist[idx_fin][N+1] = 0
+                                            for j in range(N): extended_dist[N][j] = 0
+                                            
+                                        # Aplicamos las reglas matemáticas según si es V1 o V2
+                                        if tipo_ruteo == "Ruteo Optimizado (IA)":
+                                            sel_anteante = opciones_anteante_dict.get(id_unico, "🤖 IA Decide")
+                                            sel_ante = opciones_antepenultimo_dict.get(id_unico, "🤖 IA Decide")
+                                            sel_pen = opciones_penultimo_dict.get(id_unico, "🤖 IA Decide")
+                                            sel_fin = opciones_fin_dict.get(id_unico, "🤖 IA Decide")
+                                            
+                                            idx_anteante = lugares_actuales.index(sel_anteante) if sel_anteante != "🤖 IA Decide" else -1
+                                            idx_ante = lugares_actuales.index(sel_ante) if sel_ante != "🤖 IA Decide" else -1
+                                            idx_pen = lugares_actuales.index(sel_pen) if sel_pen != "🤖 IA Decide" else -1
+                                            idx_fin = lugares_actuales.index(sel_fin) if sel_fin != "🤖 IA Decide" else -1
+                                            
+                                            if idx_fin != -1:
+                                                for i in range(N): extended_dist[i][N+1] = 99999999
+                                                extended_dist[idx_fin][N+1] = 0
+                                            else:
+                                                for i in range(N): extended_dist[i][N+1] = 0
+
+                                            if idx_pen != -1 and idx_fin != -1:
+                                                for j in range(N): 
+                                                    if j != idx_fin: extended_dist[idx_pen][j] = 99999999
+                                                for i in range(N + 1): 
+                                                    if i != idx_pen: extended_dist[i][idx_fin] = 99999999
+
+                                            if idx_ante != -1 and idx_pen != -1:
+                                                for j in range(N):
+                                                    if j != idx_pen: extended_dist[idx_ante][j] = 99999999
+                                                for i in range(N + 1): 
+                                                    if i != idx_ante: extended_dist[i][idx_pen] = 99999999
+                                                    
+                                            if idx_anteante != -1 and idx_ante != -1:
+                                                for j in range(N):
+                                                    if j != idx_ante: extended_dist[idx_anteante][j] = 99999999
+                                                for i in range(N + 1): 
+                                                    if i != idx_anteante: extended_dist[i][idx_ante] = 99999999
+                                                    
+                                        elif tipo_ruteo == "Ruteo Optimizado (IA) v2":
+                                            # En V2 cualquier punto puede ser el final absoluto global
+                                            for i in range(N): extended_dist[i][N+1] = 0
 
                                         manager = pywrapcp.RoutingIndexManager(N + 2, 1, [N], [N+1])
                                         routing = pywrapcp.RoutingModel(manager)
@@ -502,6 +576,50 @@ else:
                                             
                                         transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                                         routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+                                        
+                                        # --- REGLA MÁGICA DE POSICIONES PARA LA V2 ---
+                                        if tipo_ruteo == "Ruteo Optimizado (IA) v2":
+                                            def sequence_callback(from_index):
+                                                return 1
+                                            seq_call_idx = routing.RegisterUnaryTransitCallback(sequence_callback)
+                                            routing.AddDimension(seq_call_idx, 0, 9999, True, "Sequence")
+                                            seq_dim = routing.GetDimensionOrDie("Sequence")
+                                            solver = routing.solver()
+                                            
+                                            deptos_actuales = df_ruta['Departamento'].tolist()
+                                            dept_config = opciones_deptos_dict.get(id_unico, {})
+                                            
+                                            for dept_str, config in dept_config.items():
+                                                sel_aa = config['aa']
+                                                sel_a = config['a']
+                                                sel_p = config['p']
+                                                sel_f = config['f']
+                                                
+                                                idx_aa = lugares_actuales.index(sel_aa) if sel_aa != "🤖 IA Decide" else -1
+                                                idx_a = lugares_actuales.index(sel_a) if sel_a != "🤖 IA Decide" else -1
+                                                idx_p = lugares_actuales.index(sel_p) if sel_p != "🤖 IA Decide" else -1
+                                                idx_f = lugares_actuales.index(sel_f) if sel_f != "🤖 IA Decide" else -1
+                                                
+                                                # Limpiamos duplicados y mantenemos el orden lógico
+                                                target_last_nodes = []
+                                                for x in [idx_aa, idx_a, idx_p, idx_f]:
+                                                    if x != -1 and x not in target_last_nodes:
+                                                        target_last_nodes.append(x)
+                                                        
+                                                special_indices = set(target_last_nodes)
+                                                reg_indices = [i for i in range(N) if str(deptos_actuales[i]).strip() == dept_str and i not in special_indices]
+                                                
+                                                # Imponemos que los puntos normales vayan antes que los especiales
+                                                if len(target_last_nodes) > 0:
+                                                    first_special = target_last_nodes[0]
+                                                    for r in reg_indices:
+                                                        solver.Add(seq_dim.CumulVar(manager.NodeToIndex(r)) < seq_dim.CumulVar(manager.NodeToIndex(first_special)))
+                                                        
+                                                # Imponemos que los especiales respeten su orden exacto
+                                                for i in range(len(target_last_nodes) - 1):
+                                                    node_before = target_last_nodes[i]
+                                                    node_after = target_last_nodes[i+1]
+                                                    solver.Add(seq_dim.CumulVar(manager.NodeToIndex(node_before)) < seq_dim.CumulVar(manager.NodeToIndex(node_after)))
                                         
                                         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
                                         search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
@@ -518,7 +636,7 @@ else:
                                                 idx = solution.Value(routing.NextVar(idx))
                                             coords_ordenadas = [lista_coords[i] for i in nodos_ordenados]
                                         else:
-                                            st.error(f"No se encontró solución lógica para {ruta}.")
+                                            st.error(f"No se encontró solución matemática para {ruta}. Revisa no haber puesto el mismo lugar como Inicio y Fin al mismo tiempo o crear un bucle imposible.")
                                             continue
                                     else:
                                         st.error(f"Error Matriz en {ruta}: {err_matriz}")
@@ -979,7 +1097,6 @@ else:
                             if best_r != -1:
                                 rutas_core_locs[best_r].insert(best_pos, f_loc)
                             else:
-                                # Si es físicamente imposible meterlo en los autos existentes con +10 min, abre auto nuevo.
                                 rutas_core_locs.append([f_loc])
                                 
                         for r in rutas_core_locs:
@@ -1063,10 +1180,7 @@ else:
                             fg_trazado.add_to(mapa_calculado)
 
                 folium.LayerControl(collapsed=True).add_to(mapa_calculado)
-                
-                # --- INYECCIÓN DE LOS BOTONES DE APAGADO/PRENDIDO DE CAPAS ---
                 mapa_calculado.get_root().html.add_child(folium.Element(js_toggle_capas))
-                
                 st.session_state['mapa_guardado'] = mapa_calculado
                 st.session_state['datos_resumen'] = datos_para_resumen
                 st.session_state['calculo_terminado'] = True
@@ -1211,7 +1325,6 @@ if st.session_state.get('calculo_terminado', False):
                 else:
                     minutos_demora_real = 0
                     
-                # CONSTRUCCIÓN DE ENLACES DE RUTEO
                 waypoints_maps = []
                 waypoints_ors_json = []
                 places_ors = []
@@ -1223,23 +1336,17 @@ if st.session_state.get('calculo_terminado', False):
                         try:
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
-                            
-                            # Google Maps usa Latitud, Longitud
                             waypoints_maps.append(f"{lat},{lon}")
-                            
-                            # ORS nativo usa obligatoriamente Longitud, Latitud (¡Para evitar ir al océano!)
                             waypoints_ors_json.append(f"{lon},{lat}")
                             places_ors.append("Parada")
                         except Exception:
                             pass
                 
-                # Google Maps Link Oficial (Funciona perfecto en celular)
-                enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
+                enlace_maps = "http://googleusercontent.com/maps.google.com/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
                 
-                # ORS Link Nativo JSON (Para forzar a que dibuje la línea azul de inmediato)
                 if waypoints_ors_json:
                     places_str = "/".join(places_ors)
-                    json_str = '{"coordinates":"' + ";".join(waypoints_ors_json) + '","options":{"profile":"driving-car","preference":"recommended"}}'
+                    json_str = '{"coordinates":[' + ",".join([f"[{wp}]" for wp in waypoints_ors_json]) + '],"options":{"profile":"driving-car","preference":"recommended"}}'
                     encoded_json = urllib.parse.quote(json_str)
                     enlace_ors = f"https://maps.openrouteservice.org/#/directions/{places_str}/data/{encoded_json}"
                 else:
@@ -1281,9 +1388,35 @@ if st.session_state.get('calculo_terminado', False):
             }
         )
         
+        df_resumen_export = df_resumen.copy()
+        if "Link Google Maps" in df_resumen_export.columns:
+            df_resumen_export["Link Google Maps"] = df_resumen_export["Link Google Maps"].apply(lambda x: "Abrir Maps" if pd.notna(x) and str(x).startswith("http") else "")
+        if "Link ORS" in df_resumen_export.columns:
+            df_resumen_export["Link ORS"] = df_resumen_export["Link ORS"].apply(lambda x: "Abrir ORS" if pd.notna(x) and str(x).startswith("http") else "")
+            
         bio_resumen = io.BytesIO()
         with pd.ExcelWriter(bio_resumen, engine='openpyxl') as w:
-            df_resumen.to_excel(w, index=False, sheet_name="Resumen")
+            df_resumen_export.to_excel(w, index=False, sheet_name="Resumen")
+            ws = w.sheets["Resumen"]
+            font_link = openpyxl.styles.Font(color="0563C1", underline="single")
+            
+            for r_idx in range(len(df_resumen)):
+                row_excel = r_idx + 2
+                if 'Link Google Maps' in df_resumen.columns:
+                    c_idx = df_resumen.columns.get_loc('Link Google Maps') + 1
+                    url_maps = df_resumen.iloc[r_idx]['Link Google Maps']
+                    if pd.notna(url_maps) and str(url_maps).startswith("http"):
+                        celda = ws.cell(row=row_excel, column=c_idx)
+                        celda.hyperlink = str(url_maps)
+                        celda.font = font_link
+                        
+                if 'Link ORS' in df_resumen.columns:
+                    c_idx = df_resumen.columns.get_loc('Link ORS') + 1
+                    url_ors = df_resumen.iloc[r_idx]['Link ORS']
+                    if pd.notna(url_ors) and str(url_ors).startswith("http"):
+                        celda = ws.cell(row=row_excel, column=c_idx)
+                        celda.hyperlink = str(url_ors)
+                        celda.font = font_link
         
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
@@ -1294,6 +1427,27 @@ if st.session_state.get('calculo_terminado', False):
             bio_g = io.BytesIO()
             with pd.ExcelWriter(bio_g, engine='openpyxl') as w:
                 df_glob.to_excel(w, index=False, sheet_name="Cronograma Detallado")
-                df_resumen.to_excel(w, index=False, sheet_name="Resumen General") 
+                df_resumen_export.to_excel(w, index=False, sheet_name="Resumen General") 
+                
+                ws = w.sheets["Resumen General"]
+                font_link = openpyxl.styles.Font(color="0563C1", underline="single")
+                for r_idx in range(len(df_resumen)):
+                    row_excel = r_idx + 2
+                    if 'Link Google Maps' in df_resumen.columns:
+                        c_idx = df_resumen.columns.get_loc('Link Google Maps') + 1
+                        url_maps = df_resumen.iloc[r_idx]['Link Google Maps']
+                        if pd.notna(url_maps) and str(url_maps).startswith("http"):
+                            celda = ws.cell(row=row_excel, column=c_idx)
+                            celda.hyperlink = str(url_maps)
+                            celda.font = font_link
+                            
+                    if 'Link ORS' in df_resumen.columns:
+                        c_idx = df_resumen.columns.get_loc('Link ORS') + 1
+                        url_ors = df_resumen.iloc[r_idx]['Link ORS']
+                        if pd.notna(url_ors) and str(url_ors).startswith("http"):
+                            celda = ws.cell(row=row_excel, column=c_idx)
+                            celda.hyperlink = str(url_ors)
+                            celda.font = font_link
+                            
             with col_btn2:
                 st.download_button("📥 DESCARGAR CRONOGRAMA MAESTRO (Completo)", bio_g.getvalue(), "Cronograma_Maestro.xlsx", type="primary", use_container_width=True)
