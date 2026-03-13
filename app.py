@@ -27,7 +27,7 @@ api_key = api_key_user if api_key_user else api_key_default
 if 'calculo_terminado' not in st.session_state:
     st.session_state['calculo_terminado'] = False
 
-# --- SCRIPT DE BOTONES FLOTANTES PARA EL MAPA (REPARADO Y 100% FUNCIONAL) ---
+# --- SCRIPT DE BOTONES FLOTANTES PARA EL MAPA ---
 js_toggle_capas = """
 <div id="panel-botones-capas" style="position: absolute; top: 12px; left: 55px; z-index: 9999; background: white; padding: 6px; border-radius: 5px; box-shadow: 0 1px 5px rgba(0,0,0,0.65); font-family: sans-serif; font-size: 13px;">
     <button type="button" onclick="toggleFoliumLayers(false, event)" style="cursor: pointer; background: #ffebee; border: 1px solid #ffcdd2; padding: 4px 8px; border-radius: 3px; font-weight: bold; margin-right: 5px; color: #b71c1c;">❌ Apagar Todo</button>
@@ -47,7 +47,6 @@ function toggleFoliumLayers(turnOn, e) {
     });
 }
 
-// Bloquea los clics para que no se arrastre el mapa por accidente al tocar los botones
 var panel = document.getElementById('panel-botones-capas');
 if(panel) {
     panel.addEventListener('mousedown', function(e){ e.stopPropagation(); });
@@ -289,7 +288,7 @@ else:
                 st.session_state['calculo_terminado'] = True
 
     # ======================================================================
-    # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL TOTALMENTE INTACTA)
+    # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL + NUEVA OPCIÓN v2)
     # ======================================================================
     else:
         # BLINDAJE DE MEMORIA
@@ -358,7 +357,7 @@ else:
             if tipo_ruteo == "Ruteo Optimizado (IA)":
                 st.sidebar.info("Elige la hora de salida. Puedes forzar el orden global de los últimos 4 puntos.")
             elif tipo_ruteo == "Ruteo Optimizado (IA) v2":
-                st.sidebar.info("Elige la hora de salida y el orden de los últimos puntos ESPECÍFICO por cada Departamento. Puedes cruzar departamentos libremente.")
+                st.sidebar.info("Elige la hora de salida y el orden de los últimos puntos ESPECÍFICO por cada Departamento. El sistema forzará automáticamente que todas las rutas terminen en LABNU si existe en tu listado.")
             else:
                 st.sidebar.info("Elige la hora de salida para cada ruta.")
                 
@@ -394,22 +393,16 @@ else:
                                 deptos_lista = df_unicaruta['Departamento'].unique().tolist()
                                 opciones_deptos_dict[id_ruta] = {}
                                 
-                                # BUSCAMOS TODOS LOS LUGARES DE LABNU PARA INYECTARLOS
-                                lugares_labnu = df_unicaruta[df_unicaruta['Departamento'].astype(str).str.strip().str.upper() == 'LABNU']['Lugar'].tolist()
-                                
                                 for dept in deptos_lista:
                                     if pd.isna(dept) or str(dept).strip() == '': continue
                                     dept_str = str(dept).strip()
+                                    
+                                    # MAGIA: Ocultamos LABNU de la configuración visual del usuario
+                                    if dept_str.upper() == 'LABNU': 
+                                        continue
+                                        
                                     st.sidebar.markdown(f"🔹 *Depto: {dept_str}*")
-                                    
                                     l_dept = df_unicaruta[df_unicaruta['Departamento'] == dept]['Lugar'].tolist()
-                                    
-                                    # MAGIA: Inyectamos los lugares de LABNU en los demás departamentos
-                                    if dept_str.upper() != 'LABNU':
-                                        for loc in lugares_labnu:
-                                            if loc not in l_dept:
-                                                l_dept.append(loc)
-                                                
                                     opc_dept = ["🤖 IA Decide"] + l_dept
                                     
                                     sel_aa = st.sidebar.selectbox("Ante-antepenúltimo:", opc_dept, index=0, key=f"aa_{id_ruta}_{dept_str}")
@@ -535,7 +528,6 @@ else:
                                         else:
                                             for j in range(N): extended_dist[N][j] = 0
                                             
-                                        # Aplicamos las reglas matemáticas según si es V1 o V2
                                         if tipo_ruteo == "Ruteo Optimizado (IA)":
                                             sel_anteante = opciones_anteante_dict.get(id_unico, "🤖 IA Decide")
                                             sel_ante = opciones_antepenultimo_dict.get(id_unico, "🤖 IA Decide")
@@ -572,8 +564,20 @@ else:
                                                     if i != idx_anteante: extended_dist[i][idx_ante] = 99999999
                                                     
                                         elif tipo_ruteo == "Ruteo Optimizado (IA) v2":
-                                            # En V2 cualquier punto puede ser el final absoluto global
-                                            for i in range(N): extended_dist[i][N+1] = 0
+                                            # MAGIA: Buscamos dónde está LABNU en esta ruta específica
+                                            deptos_actuales = df_ruta['Departamento'].tolist()
+                                            idx_labnu = -1
+                                            for idx_loc, depto_val in enumerate(deptos_actuales):
+                                                if str(depto_val).strip().upper() == 'LABNU':
+                                                    idx_labnu = idx_loc
+                                                    break
+                                            
+                                            # Si hay LABNU, se fuerza como punto de cierre final y absoluto
+                                            if idx_labnu != -1:
+                                                for i in range(N): extended_dist[i][N+1] = 99999999
+                                                extended_dist[idx_labnu][N+1] = 0
+                                            else:
+                                                for i in range(N): extended_dist[i][N+1] = 0
 
                                         manager = pywrapcp.RoutingIndexManager(N + 2, 1, [N], [N+1])
                                         routing = pywrapcp.RoutingModel(manager)
@@ -586,7 +590,6 @@ else:
                                         transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                                         routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                                         
-                                        # --- REGLA MÁGICA DE POSICIONES PARA LA V2 ---
                                         if tipo_ruteo == "Ruteo Optimizado (IA) v2":
                                             def sequence_callback(from_index):
                                                 return 1
@@ -609,7 +612,6 @@ else:
                                                 idx_p = lugares_actuales.index(sel_p) if sel_p != "🤖 IA Decide" else -1
                                                 idx_f = lugares_actuales.index(sel_f) if sel_f != "🤖 IA Decide" else -1
                                                 
-                                                # Limpiamos duplicados y mantenemos el orden lógico
                                                 target_last_nodes = []
                                                 for x in [idx_aa, idx_a, idx_p, idx_f]:
                                                     if x != -1 and x not in target_last_nodes:
@@ -618,13 +620,11 @@ else:
                                                 special_indices = set(target_last_nodes)
                                                 reg_indices = [i for i in range(N) if str(deptos_actuales[i]).strip() == dept_str and i not in special_indices]
                                                 
-                                                # Imponemos que los puntos normales vayan antes que los especiales
                                                 if len(target_last_nodes) > 0:
                                                     first_special = target_last_nodes[0]
                                                     for r in reg_indices:
                                                         solver.Add(seq_dim.CumulVar(manager.NodeToIndex(r)) < seq_dim.CumulVar(manager.NodeToIndex(first_special)))
                                                         
-                                                # Imponemos que los especiales respeten su orden exacto
                                                 for i in range(len(target_last_nodes) - 1):
                                                     node_before = target_last_nodes[i]
                                                     node_after = target_last_nodes[i+1]
