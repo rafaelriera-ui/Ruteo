@@ -683,10 +683,12 @@ else:
                                                 
                                                 target_last_nodes = []
                                                 for x in [idx_aa, idx_a, idx_p, idx_f]:
+                                                    # FILTRO ANTIBUCLES: No meter al punto de inicio ni al final absoluto (LABNU) en la secuencia intermedia
                                                     if x != -1 and x not in target_last_nodes and x != idx_inicio and x != idx_labnu:
                                                         target_last_nodes.append(x)
                                                         
                                                 special_indices = set(target_last_nodes)
+                                                # FILTRO ANTIBUCLES: Tampoco meterlos en los nodos regulares
                                                 reg_indices = [i for i in range(N) if str(deptos_actuales[i]).strip() == dept_str and i not in special_indices and i != idx_inicio and i != idx_labnu]
                                                 
                                                 if len(target_last_nodes) > 0:
@@ -1456,35 +1458,10 @@ if st.session_state.get('calculo_terminado', False):
             }
         )
         
-        df_resumen_export = df_resumen.copy()
-        if "Link Google Maps" in df_resumen_export.columns:
-            df_resumen_export["Link Google Maps"] = df_resumen_export["Link Google Maps"].apply(lambda x: "Abrir Maps" if pd.notna(x) and str(x).startswith("http") else "")
-        if "Link ORS" in df_resumen_export.columns:
-            df_resumen_export["Link ORS"] = df_resumen_export["Link ORS"].apply(lambda x: "Abrir ORS" if pd.notna(x) and str(x).startswith("http") else "")
-            
+        # Guardamos en Excel exactamente con la URL cruda sin ningún tipo de maquillaje.
         bio_resumen = io.BytesIO()
         with pd.ExcelWriter(bio_resumen, engine='openpyxl') as w:
-            df_resumen_export.to_excel(w, index=False, sheet_name="Resumen")
-            ws = w.sheets["Resumen"]
-            font_link = openpyxl.styles.Font(color="0563C1", underline="single")
-            
-            for r_idx in range(len(df_resumen)):
-                row_excel = r_idx + 2
-                if 'Link Google Maps' in df_resumen.columns:
-                    c_idx = df_resumen.columns.get_loc('Link Google Maps') + 1
-                    url_maps = df_resumen.iloc[r_idx]['Link Google Maps']
-                    if pd.notna(url_maps) and str(url_maps).startswith("http"):
-                        celda = ws.cell(row=row_excel, column=c_idx)
-                        celda.hyperlink = str(url_maps)
-                        celda.font = font_link
-                        
-                if 'Link ORS' in df_resumen.columns:
-                    c_idx = df_resumen.columns.get_loc('Link ORS') + 1
-                    url_ors = df_resumen.iloc[r_idx]['Link ORS']
-                    if pd.notna(url_ors) and str(url_ors).startswith("http"):
-                        celda = ws.cell(row=row_excel, column=c_idx)
-                        celda.hyperlink = str(url_ors)
-                        celda.font = font_link
+            df_resumen.to_excel(w, index=False, sheet_name="Resumen")
         
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
@@ -1495,27 +1472,7 @@ if st.session_state.get('calculo_terminado', False):
             bio_g = io.BytesIO()
             with pd.ExcelWriter(bio_g, engine='openpyxl') as w:
                 df_glob.to_excel(w, index=False, sheet_name="Cronograma Detallado")
-                df_resumen_export.to_excel(w, index=False, sheet_name="Resumen General") 
-                
-                ws = w.sheets["Resumen General"]
-                font_link = openpyxl.styles.Font(color="0563C1", underline="single")
-                for r_idx in range(len(df_resumen)):
-                    row_excel = r_idx + 2
-                    if 'Link Google Maps' in df_resumen.columns:
-                        c_idx = df_resumen.columns.get_loc('Link Google Maps') + 1
-                        url_maps = df_resumen.iloc[r_idx]['Link Google Maps']
-                        if pd.notna(url_maps) and str(url_maps).startswith("http"):
-                            celda = ws.cell(row=row_excel, column=c_idx)
-                            celda.hyperlink = str(url_maps)
-                            celda.font = font_link
-                            
-                    if 'Link ORS' in df_resumen.columns:
-                        c_idx = df_resumen.columns.get_loc('Link ORS') + 1
-                        url_ors = df_resumen.iloc[r_idx]['Link ORS']
-                        if pd.notna(url_ors) and str(url_ors).startswith("http"):
-                            celda = ws.cell(row=row_excel, column=c_idx)
-                            celda.hyperlink = str(url_ors)
-                            celda.font = font_link
+                df_resumen.to_excel(w, index=False, sheet_name="Resumen General") 
                             
             with col_btn2:
                 st.download_button("📥 DESCARGAR CRONOGRAMA MAESTRO (Completo)", bio_g.getvalue(), "Cronograma_Maestro.xlsx", type="primary", use_container_width=True)
