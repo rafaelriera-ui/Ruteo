@@ -683,12 +683,10 @@ else:
                                                 
                                                 target_last_nodes = []
                                                 for x in [idx_aa, idx_a, idx_p, idx_f]:
-                                                    # FILTRO ANTIBUCLES: No meter al punto de inicio ni al final absoluto (LABNU) en la secuencia intermedia
                                                     if x != -1 and x not in target_last_nodes and x != idx_inicio and x != idx_labnu:
                                                         target_last_nodes.append(x)
                                                         
                                                 special_indices = set(target_last_nodes)
-                                                # FILTRO ANTIBUCLES: Tampoco meterlos en los nodos regulares
                                                 reg_indices = [i for i in range(N) if str(deptos_actuales[i]).strip() == dept_str and i not in special_indices and i != idx_inicio and i != idx_labnu]
                                                 
                                                 if len(target_last_nodes) > 0:
@@ -702,10 +700,10 @@ else:
                                                     solver.Add(seq_dim.CumulVar(manager.NodeToIndex(node_before)) < seq_dim.CumulVar(manager.NodeToIndex(node_after)))
                                         
                                         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                                        # MOTOR MÁS ESTABLE Y RÁPIDO Y AUTOMATICO (EVITA ERRORES AL BUSCAR RUTAS)
-                                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
+                                        # VOLVIMOS A SAVINGS: El motor más estable y rápido. No se frustra con las secuencias lógicas.
+                                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
                                         search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-                                        search_parameters.time_limit.seconds = 8 
+                                        search_parameters.time_limit.seconds = 5 
                                         
                                         solution = routing.SolveWithParameters(search_parameters)
                                         
@@ -1410,7 +1408,7 @@ if st.session_state.get('calculo_terminado', False):
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
                             
-                            # Formato Oficial Google Maps (Directo al GPS del celular)
+                            # Formato Oficial Google Maps
                             waypoints_maps.append(f"{lat},{lon}")
                             
                             # Formato Oficial ORS Clásico (Siempre Longitud, Latitud)
@@ -1419,7 +1417,7 @@ if st.session_state.get('calculo_terminado', False):
                             pass
                 
                 # ENLACES CLÁSICOS E INFALIBLES Y LIMPIOS
-                enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
+                enlace_maps = "http://googleusercontent.com/maps.google.com/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
                 enlace_ors = "https://maps.openrouteservice.org/directions?a=" + ",".join(waypoints_ors) + "&b=0&c=0&k1=es-ES&k2=km" if waypoints_ors else ""
                 
                 data_resumen_general.append({
