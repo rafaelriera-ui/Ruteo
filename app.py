@@ -291,6 +291,7 @@ else:
     # FLUJO 2: ARCHIVO CRUDO (LÓGICA ORIGINAL + NUEVA OPCIÓN v2)
     # ======================================================================
     else:
+        # BLINDAJE DE MEMORIA 
         punto_final_vrp = ""
         hora_salida_vrp = datetime.time(8, 0)
         hora_llegada_vrp = datetime.time(14, 30)
@@ -365,7 +366,7 @@ else:
             else:
                 st.sidebar.info("Elige la hora de salida para cada ruta.")
 
-            # --- LÓGICA V2 GLOBAL ---
+            # --- LÓGICA V2 GLOBAL (LIMPIA DE LABNU EN PANTALLA) ---
             if tipo_ruteo == "Ruteo Optimizado (IA) v2" and usar_config_global_v2:
                 st.sidebar.markdown("**⚙️ Configuración Global (Aplica a todos los días)**")
                 for ruta in rutas_seleccionadas:
@@ -387,7 +388,7 @@ else:
                         if pd.isna(dept) or str(dept).strip() == '': continue
                         dept_str = str(dept).strip()
                         
-                        # IGNORAMOS LABNU EN LA INTERFAZ VISUAL
+                        # IGNORAMOS LABNU EN LA INTERFAZ VISUAL COMPLETAMENTE
                         if dept_str.upper() == 'LABNU': 
                             continue
                         
@@ -604,9 +605,6 @@ else:
                                             if idx_fin != -1:
                                                 for i in range(N): extended_dist[i][N+1] = 99999999
                                                 extended_dist[idx_fin][N+1] = 0
-                                                # REMEDIO MATEMÁTICO: Bloqueamos que el inicio vaya directo al final si hay más puntos
-                                                if idx_inicio == -1 and N > 1:
-                                                    extended_dist[N][idx_fin] = 99999999
                                             else:
                                                 for i in range(N): extended_dist[i][N+1] = 0
 
@@ -639,9 +637,6 @@ else:
                                             if idx_labnu != -1:
                                                 for i in range(N): extended_dist[i][N+1] = 99999999
                                                 extended_dist[idx_labnu][N+1] = 0
-                                                # REMEDIO MATEMÁTICO: Evitar que conecte Inicio -> LABNU directamente y deje a todos afuera
-                                                if idx_inicio == -1 and N > 1:
-                                                    extended_dist[N][idx_labnu] = 99999999
                                             else:
                                                 for i in range(N): extended_dist[i][N+1] = 0
 
@@ -697,8 +692,8 @@ else:
                                                     solver.Add(seq_dim.CumulVar(manager.NodeToIndex(node_before)) < seq_dim.CumulVar(manager.NodeToIndex(node_after)))
                                         
                                         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                                        # REMEDIO MATEMÁTICO 2: Cambiamos "SAVINGS" por "PATH_CHEAPEST_ARC" que es infinitamente más estable con bloqueos fijos
-                                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                                        # MOTOR MÁS PODEROSO: "PARALLEL_CHEAPEST_INSERTION" JAMÁS SE RINDE ANTE PUNTOS FIJOS
+                                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
                                         search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
                                         search_parameters.time_limit.seconds = 5 
                                         
@@ -1404,8 +1399,7 @@ if st.session_state.get('calculo_terminado', False):
                     minutos_demora_real = 0
                     
                 waypoints_maps = []
-                waypoints_ors_json = []
-                places_ors = []
+                waypoints_ors = []
                 
                 for p in d['paradas']:
                     coord_raw = str(p.get('Coordenadas', ''))
@@ -1414,21 +1408,18 @@ if st.session_state.get('calculo_terminado', False):
                         try:
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
+                            
+                            # Google Maps pide Latitud, Longitud para su link clásico
                             waypoints_maps.append(f"{lat},{lon}")
-                            waypoints_ors_json.append(f"{lon},{lat}")
-                            places_ors.append("Parada")
+                            
+                            # ORS pide Longitud, Latitud para su link clásico
+                            waypoints_ors.append(f"{lon},{lat}")
                         except Exception:
                             pass
                 
-                enlace_maps = "http://googleusercontent.com/maps.google.com/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
-                
-                if waypoints_ors_json:
-                    places_str = "/".join(places_ors)
-                    json_str = '{"coordinates":[' + ",".join([f"[{wp}]" for wp in waypoints_ors_json]) + '],"options":{"profile":"driving-car","preference":"recommended"}}'
-                    encoded_json = urllib.parse.quote(json_str)
-                    enlace_ors = f"https://maps.openrouteservice.org/#/directions/{places_str}/data/{encoded_json}"
-                else:
-                    enlace_ors = ""
+                # ENLACES CLÁSICOS E INFALIBLES
+                enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
+                enlace_ors = "https://maps.openrouteservice.org/directions?a=" + ",".join(waypoints_ors) + "&b=0&c=0&k1=es-ES&k2=km" if waypoints_ors else ""
                 
                 data_resumen_general.append({
                     "Día": d['dia'],
