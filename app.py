@@ -1400,7 +1400,7 @@ if st.session_state.get('calculo_terminado', False):
                     minutos_demora_real = 0
                     
                 waypoints_maps = []
-                waypoints_ors = []
+                waypoints_ors_list = []
                 
                 for p in d['paradas']:
                     coord_raw = str(p.get('Coordenadas', ''))
@@ -1410,17 +1410,16 @@ if st.session_state.get('calculo_terminado', False):
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
                             
-                            # Formato Oficial Google Maps
+                            # Google Maps Directo
                             waypoints_maps.append(f"{lat},{lon}")
                             
-                            # Formato Oficial ORS Clásico (Siempre Longitud, Latitud)
-                            waypoints_ors.append(f"{lon},{lat}")
+                            # ORS Clásico web URL (Requiere lat,lon para su parámetro 'a=')
+                            waypoints_ors_list.append(f"{lat},{lon}")
                         except Exception:
                             pass
                 
-                # ENLACES CLÁSICOS E INFALIBLES Y LIMPIOS
-                enlace_maps = "http://googleusercontent.com/maps.google.com/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
-                enlace_ors = "https://maps.openrouteservice.org/directions?a=" + ",".join(waypoints_ors) + "&b=0&c=0&k1=es-ES&k2=km" if waypoints_ors else ""
+                enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
+                enlace_ors = "https://maps.openrouteservice.org/directions?a=" + ",".join(waypoints_ors_list) + "&b=0&c=0&k1=es-ES&k2=km" if waypoints_ors_list else ""
                 
                 data_resumen_general.append({
                     "Día": d['dia'],
@@ -1458,7 +1457,7 @@ if st.session_state.get('calculo_terminado', False):
             }
         )
         
-        # Guardamos en Excel exactamente con la URL cruda sin ningún tipo de maquillaje.
+        # EXCEL PURO, CRUDO, SIN HIPERVÍNCULOS "MAQUILLADOS" PARA NO ROMPER NADA
         bio_resumen = io.BytesIO()
         with pd.ExcelWriter(bio_resumen, engine='openpyxl') as w:
             df_resumen.to_excel(w, index=False, sheet_name="Resumen")
