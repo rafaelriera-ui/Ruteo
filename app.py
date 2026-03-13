@@ -365,7 +365,7 @@ else:
             else:
                 st.sidebar.info("Elige la hora de salida para cada ruta.")
 
-            # --- LÓGICA V2 GLOBAL (LIMPIA DE LABNU EN PANTALLA) ---
+            # --- LÓGICA V2 GLOBAL ---
             if tipo_ruteo == "Ruteo Optimizado (IA) v2" and usar_config_global_v2:
                 st.sidebar.markdown("**⚙️ Configuración Global (Aplica a todos los días)**")
                 for ruta in rutas_seleccionadas:
@@ -387,7 +387,7 @@ else:
                         if pd.isna(dept) or str(dept).strip() == '': continue
                         dept_str = str(dept).strip()
                         
-                        # IGNORAMOS LABNU EN LA INTERFAZ VISUAL COMPLETAMENTE
+                        # IGNORAMOS LABNU EN LA INTERFAZ VISUAL
                         if dept_str.upper() == 'LABNU': 
                             continue
                         
@@ -604,6 +604,9 @@ else:
                                             if idx_fin != -1:
                                                 for i in range(N): extended_dist[i][N+1] = 99999999
                                                 extended_dist[idx_fin][N+1] = 0
+                                                # REMEDIO MATEMÁTICO: Bloqueamos que el inicio vaya directo al final si hay más puntos
+                                                if idx_inicio == -1 and N > 1:
+                                                    extended_dist[N][idx_fin] = 99999999
                                             else:
                                                 for i in range(N): extended_dist[i][N+1] = 0
 
@@ -626,7 +629,6 @@ else:
                                                     if i != idx_anteante: extended_dist[i][idx_ante] = 99999999
                                                     
                                         elif tipo_ruteo == "Ruteo Optimizado (IA) v2":
-                                            # Buscamos LABNU y lo forzamos al final absoluto global de forma silenciosa
                                             deptos_actuales = df_ruta['Departamento'].tolist()
                                             idx_labnu = -1
                                             for idx_loc, depto_val in enumerate(deptos_actuales):
@@ -637,6 +639,9 @@ else:
                                             if idx_labnu != -1:
                                                 for i in range(N): extended_dist[i][N+1] = 99999999
                                                 extended_dist[idx_labnu][N+1] = 0
+                                                # REMEDIO MATEMÁTICO: Evitar que conecte Inicio -> LABNU directamente y deje a todos afuera
+                                                if idx_inicio == -1 and N > 1:
+                                                    extended_dist[N][idx_labnu] = 99999999
                                             else:
                                                 for i in range(N): extended_dist[i][N+1] = 0
 
@@ -692,7 +697,9 @@ else:
                                                     solver.Add(seq_dim.CumulVar(manager.NodeToIndex(node_before)) < seq_dim.CumulVar(manager.NodeToIndex(node_after)))
                                         
                                         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                                        # REMEDIO MATEMÁTICO 2: Cambiamos "SAVINGS" por "PATH_CHEAPEST_ARC" que es infinitamente más estable con bloqueos fijos
+                                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                                        search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
                                         search_parameters.time_limit.seconds = 5 
                                         
                                         solution = routing.SolveWithParameters(search_parameters)
@@ -1167,6 +1174,7 @@ else:
                             if best_r != -1:
                                 rutas_core_locs[best_r].insert(best_pos, f_loc)
                             else:
+                                # Si es físicamente imposible meterlo en los autos existentes con +10 min, abre auto nuevo.
                                 rutas_core_locs.append([f_loc])
                                 
                         for r in rutas_core_locs:
