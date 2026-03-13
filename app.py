@@ -1400,7 +1400,8 @@ if st.session_state.get('calculo_terminado', False):
                     minutos_demora_real = 0
                     
                 waypoints_maps = []
-                waypoints_ors = []
+                waypoints_ors_json = []
+                places_ors = []
                 
                 for p in d['paradas']:
                     coord_raw = str(p.get('Coordenadas', ''))
@@ -1410,17 +1411,24 @@ if st.session_state.get('calculo_terminado', False):
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
                             
-                            # Formato Oficial Google Maps
                             waypoints_maps.append(f"{lat},{lon}")
-                            
-                            # Formato Oficial ORS Clásico (Siempre Longitud, Latitud)
-                            waypoints_ors.append(f"{lon},{lat}")
+                            waypoints_ors_json.append(f"{lon},{lat}")
+                            places_ors.append("Parada")
                         except Exception:
                             pass
                 
-                # ENLACES CLÁSICOS E INFALIBLES Y LIMPIOS
-                enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
-                enlace_ors = "https://maps.openrouteservice.org/#/directions/" + "/".join(waypoints_ors) if waypoints_ors else ""
+                # Google Maps (Intacto, como pediste)
+                enlace_maps = "http://googleusercontent.com/maps.google.com/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
+                
+                # ORS con la estructura JSON que enviaste (Separador ';' en vez de array de arrays)
+                if waypoints_ors_json:
+                    places_str = "/".join(places_ors)
+                    coords_str = ";".join(waypoints_ors_json)
+                    json_str = '{"coordinates":"' + coords_str + '","options":{"profile":"driving-car","preference":"recommended"}}'
+                    encoded_json = urllib.parse.quote(json_str)
+                    enlace_ors = f"https://maps.openrouteservice.org/#/directions/{places_str}/data/{encoded_json}"
+                else:
+                    enlace_ors = ""
                 
                 data_resumen_general.append({
                     "Día": d['dia'],
