@@ -368,7 +368,7 @@ else:
             else:
                 st.sidebar.info("Elige la hora de salida para cada ruta.")
 
-            # --- LÓGICA V2 GLOBAL ---
+            # --- LÓGICA V2 GLOBAL (LIMPIA DE LABNU EN PANTALLA) ---
             if tipo_ruteo == "Ruteo Optimizado (IA) v2" and usar_config_global_v2:
                 st.sidebar.markdown("**⚙️ Configuración Global (Aplica a todos los días)**")
                 for ruta in rutas_seleccionadas:
@@ -376,6 +376,7 @@ else:
                     if df_ruta_global.empty: continue
                     st.sidebar.markdown(f"**Ruta:** {ruta}")
                     
+                    # Filtramos LABNU del Inicio Global
                     lugares_lista_g = [loc for loc in df_ruta_global['Lugar'].unique().tolist() if str(df_ruta_global[df_ruta_global['Lugar']==loc]['Departamento'].iloc[0]).strip().upper() != 'LABNU']
                     opciones_lugar_g = ["🤖 IA Decide"] + lugares_lista_g
                     
@@ -389,12 +390,14 @@ else:
                         if pd.isna(dept) or str(dept).strip() == '': continue
                         dept_str = str(dept).strip()
                         
+                        # IGNORAMOS LABNU EN LA INTERFAZ VISUAL COMPLETAMENTE
                         if dept_str.upper() == 'LABNU': 
                             continue
                         
                         st.sidebar.markdown(f"🔹 *Depto: {dept_str}*")
                         l_dept_g = df_ruta_global[df_ruta_global['Departamento'] == dept]['Lugar'].unique().tolist()
                         
+                        # Por seguridad, si algún lugar se coló con nombre LABNU, lo volamos de la lista
                         l_dept_g = [loc for loc in l_dept_g if str(loc).strip().upper() != 'LABNU']
                         opc_dept_g = ["🤖 IA Decide"] + l_dept_g
                         
@@ -456,6 +459,7 @@ else:
                                         if pd.isna(dept) or str(dept).strip() == '': continue
                                         dept_str = str(dept).strip()
                                         
+                                        # IGNORAMOS LABNU EN LA INTERFAZ
                                         if dept_str.upper() == 'LABNU': 
                                             continue
                                             
@@ -679,11 +683,13 @@ else:
                                                 
                                                 target_last_nodes = []
                                                 for x in [idx_aa, idx_a, idx_p, idx_f]:
-                                                    if x != -1 and x not in target_last_nodes:
+                                                    # FILTRO ANTIBUCLES: No meter al punto de inicio ni al final absoluto (LABNU) en la secuencia intermedia
+                                                    if x != -1 and x not in target_last_nodes and x != idx_inicio and x != idx_labnu:
                                                         target_last_nodes.append(x)
                                                         
                                                 special_indices = set(target_last_nodes)
-                                                reg_indices = [i for i in range(N) if str(deptos_actuales[i]).strip() == dept_str and i not in special_indices]
+                                                # FILTRO ANTIBUCLES: Tampoco meterlos en los nodos regulares
+                                                reg_indices = [i for i in range(N) if str(deptos_actuales[i]).strip() == dept_str and i not in special_indices and i != idx_inicio and i != idx_labnu]
                                                 
                                                 if len(target_last_nodes) > 0:
                                                     first_special = target_last_nodes[0]
@@ -696,10 +702,10 @@ else:
                                                     solver.Add(seq_dim.CumulVar(manager.NodeToIndex(node_before)) < seq_dim.CumulVar(manager.NodeToIndex(node_after)))
                                         
                                         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                                        # VOLVIMOS A SAVINGS: El motor más estable y rápido. No se frustra con las secuencias lógicas.
-                                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                                        # MOTOR MÁS ESTABLE Y RÁPIDO Y AUTOMATICO (EVITA ERRORES AL BUSCAR RUTAS)
+                                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
                                         search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-                                        search_parameters.time_limit.seconds = 5 
+                                        search_parameters.time_limit.seconds = 8 
                                         
                                         solution = routing.SolveWithParameters(search_parameters)
                                         
@@ -1328,18 +1334,9 @@ if st.session_state.get('calculo_terminado', False):
                 default_h = datetime.time(9,0)
                 default_wait = st.session_state.get('min_parada_guardado', 15)
                 
-                tipo_actual = st.session_state.get('tipo_ruteo', "Creación de rutas propias")
-                
-                if "Creación de rutas" in tipo_actual:
-                    try:
-                        default_h = hora_salida_vrp
-                        default_wait = min_parada_vrp
-                    except NameError:
-                        pass
-                else:
-                    dict_horas = st.session_state.get('hora_salida_rutas_dict', {})
-                    if d['id_unico'] in dict_horas:
-                        default_h = dict_horas[d['id_unico']]
+                dict_horas = st.session_state.get('hora_salida_rutas_dict', {})
+                if d['id_unico'] in dict_horas:
+                    default_h = dict_horas[d['id_unico']]
                 
                 h_inicio = c1.time_input("Salida", default_h, key=f"h_{d['id_unico']}")
                 espera = c2.number_input("Espera por parada (min)", 0, 300, default_wait, key=f"w_{d['id_unico']}")
@@ -1413,10 +1410,10 @@ if st.session_state.get('calculo_terminado', False):
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
                             
-                            # Google Maps pide Latitud, Longitud en su formato oficial
+                            # Formato Oficial Google Maps (Directo al GPS del celular)
                             waypoints_maps.append(f"{lat},{lon}")
                             
-                            # ORS pide Longitud, Latitud para su link clásico oficial
+                            # Formato Oficial ORS Clásico (Siempre Longitud, Latitud)
                             waypoints_ors.append(f"{lon},{lat}")
                         except Exception:
                             pass
