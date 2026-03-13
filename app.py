@@ -519,7 +519,7 @@ else:
         # --- BOTÓN DE CÁLCULO ---
         if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
             st.session_state['hora_salida_rutas_dict'] = hora_salida_rutas_dict
-            st.session_state['tipo_ruteo'] = tipo_ruteo # <-- BLINDAJE EN MEMORIA PARA MANTENER LA HORA A LAS 09:00
+            st.session_state['tipo_ruteo'] = tipo_ruteo 
             
             if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)", "Ruteo Optimizado (IA) v2"]:
                 st.session_state['min_parada_guardado'] = min_parada_global
@@ -683,12 +683,10 @@ else:
                                                 
                                                 target_last_nodes = []
                                                 for x in [idx_aa, idx_a, idx_p, idx_f]:
-                                                    # FILTRO ANTIBUCLES: No meter al punto de inicio ni al final absoluto (LABNU) en la secuencia intermedia
                                                     if x != -1 and x not in target_last_nodes and x != idx_inicio and x != idx_labnu:
                                                         target_last_nodes.append(x)
                                                         
                                                 special_indices = set(target_last_nodes)
-                                                # FILTRO ANTIBUCLES: Tampoco meterlos en los nodos regulares
                                                 reg_indices = [i for i in range(N) if str(deptos_actuales[i]).strip() == dept_str and i not in special_indices and i != idx_inicio and i != idx_labnu]
                                                 
                                                 if len(target_last_nodes) > 0:
@@ -702,7 +700,6 @@ else:
                                                     solver.Add(seq_dim.CumulVar(manager.NodeToIndex(node_before)) < seq_dim.CumulVar(manager.NodeToIndex(node_after)))
                                         
                                         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                                        # VOLVIMOS A SAVINGS: El motor más estable y rápido. No se frustra con las secuencias lógicas.
                                         search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
                                         search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
                                         search_parameters.time_limit.seconds = 5 
@@ -1417,10 +1414,9 @@ if st.session_state.get('calculo_terminado', False):
                         except Exception:
                             pass
                 
-                # Google Maps (Intacto, como pediste)
-                enlace_maps = "http://googleusercontent.com/maps.google.com/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
+                # ENLACES CLÁSICOS E INFALIBLES
+                enlace_maps = "https://www.google.com/maps/dir/-32.86315,-68.74454/-32.88245,-68.87469/-32.88351,-68.84/-32.8695,-68.82753/-32.92827,-68.8462/-32.95443,-68.83257/-32.92266,-68.86479/-32.92167,-68.8793/-32.93254,-68.8936/-32.93254,-68.87374/-32.94563,-68.87016/-32.90284,-68.87095/" + "/".join(waypoints_maps) if waypoints_maps else ""
                 
-                # ORS con la estructura JSON que enviaste (Separador ';' en vez de array de arrays)
                 if waypoints_ors_json:
                     places_str = "/".join(places_ors)
                     coords_str = ";".join(waypoints_ors_json)
