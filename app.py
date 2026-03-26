@@ -519,7 +519,7 @@ else:
         # --- BOTÓN DE CÁLCULO ---
         if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
             st.session_state['hora_salida_rutas_dict'] = hora_salida_rutas_dict
-            st.session_state['tipo_ruteo'] = tipo_ruteo 
+            st.session_state['tipo_ruteo'] = tipo_ruteo # <-- BLINDAJE EN MEMORIA PARA MANTENER LA HORA A LAS 09:00
             
             if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)", "Ruteo Optimizado (IA) v2"]:
                 st.session_state['min_parada_guardado'] = min_parada_global
@@ -645,6 +645,9 @@ else:
                                             if idx_labnu != -1:
                                                 for i in range(N): extended_dist[i][N+1] = 99999999
                                                 extended_dist[idx_labnu][N+1] = 0
+                                                # REMEDIO MATEMÁTICO: Evitar que conecte Inicio -> LABNU directamente y deje a todos afuera
+                                                if idx_inicio == -1 and N > 1:
+                                                    extended_dist[N][idx_labnu] = 99999999
                                             else:
                                                 for i in range(N): extended_dist[i][N+1] = 0
 
@@ -683,10 +686,12 @@ else:
                                                 
                                                 target_last_nodes = []
                                                 for x in [idx_aa, idx_a, idx_p, idx_f]:
+                                                    # FILTRO ANTIBUCLES: No meter al punto de inicio ni al final absoluto (LABNU) en la secuencia
                                                     if x != -1 and x not in target_last_nodes and x != idx_inicio and x != idx_labnu:
                                                         target_last_nodes.append(x)
                                                         
                                                 special_indices = set(target_last_nodes)
+                                                # FILTRO ANTIBUCLES: Tampoco meterlos en los nodos regulares
                                                 reg_indices = [i for i in range(N) if str(deptos_actuales[i]).strip() == dept_str and i not in special_indices and i != idx_inicio and i != idx_labnu]
                                                 
                                                 if len(target_last_nodes) > 0:
@@ -700,11 +705,26 @@ else:
                                                     solver.Add(seq_dim.CumulVar(manager.NodeToIndex(node_before)) < seq_dim.CumulVar(manager.NodeToIndex(node_after)))
                                         
                                         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
                                         search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
                                         search_parameters.time_limit.seconds = 5 
                                         
+                                        # SISTEMA DE MÚLTIPLES INTENTOS PARA EVITAR ERRORES DE BUCLE
+                                        if tipo_ruteo == "Ruteo Optimizado (IA) v2":
+                                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.LOCAL_CHEAPEST_INSERTION
+                                        else:
+                                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                                        
                                         solution = routing.SolveWithParameters(search_parameters)
+                                        
+                                        if not solution:
+                                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                                            solution = routing.SolveWithParameters(search_parameters)
+                                        if not solution:
+                                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.GLOBAL_CHEAPEST_ARC
+                                            solution = routing.SolveWithParameters(search_parameters)
+                                        if not solution:
+                                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.FIRST_UNBOUND_MIN_VALUE
+                                            solution = routing.SolveWithParameters(search_parameters)
                                         
                                         if solution:
                                             idx = routing.Start(0)
@@ -735,13 +755,12 @@ else:
                                     for nodo_idx in nodos_ordenados:
                                         fila = df_ruta.iloc[nodo_idx]
                                         paradas_info.append({
-                                            "Día": fila.get('Día',''), "Ruta": fila.get('Ruta',''),
+                                            "Día": fila.get('Día',''), "Ruta": ruta_nombre, 
                                             "Departamento": fila.get('Departamento',''), "Lugar": fila.get('Lugar',''),
                                             "Coordenadas": fila.get('Coordenadas','')
                                         })
-
                                     datos_para_resumen.append({
-                                        "id_unico": id_unico, "dia": dia, "ruta": ruta,
+                                        "id_unico": id_unico, "dia": dia, "ruta": ruta_nombre,
                                         "puntos": len(df_ruta), "dist_km": round(props['distance']/1000, 2),
                                         "drive_mins": round(props['duration']/60, 0), "color": color_actual,
                                         "paradas": paradas_info, "segmentos": segments,
@@ -1397,8 +1416,7 @@ if st.session_state.get('calculo_terminado', False):
                     minutos_demora_real = 0
                     
                 waypoints_maps = []
-                waypoints_ors_json = []
-                places_ors = []
+                waypoints_ors = []
                 
                 for p in d['paradas']:
                     coord_raw = str(p.get('Coordenadas', ''))
@@ -1409,22 +1427,13 @@ if st.session_state.get('calculo_terminado', False):
                             lon = float(partes[1].strip())
                             
                             waypoints_maps.append(f"{lat},{lon}")
-                            waypoints_ors_json.append(f"{lon},{lat}")
-                            places_ors.append("Parada")
+                            waypoints_ors.append(f"{lon},{lat}")
                         except Exception:
                             pass
                 
-                # ENLACES CLÁSICOS E INFALIBLES
-                enlace_maps = "https://www.google.com/maps/dir/-32.86315,-68.74454/-32.88245,-68.87469/-32.88351,-68.84/-32.8695,-68.82753/-32.92827,-68.8462/-32.95443,-68.83257/-32.92266,-68.86479/-32.92167,-68.8793/-32.93254,-68.8936/-32.93254,-68.87374/-32.94563,-68.87016/-32.90284,-68.87095/" + "/".join(waypoints_maps) if waypoints_maps else ""
-                
-                if waypoints_ors_json:
-                    places_str = "/".join(places_ors)
-                    coords_str = ";".join(waypoints_ors_json)
-                    json_str = '{"coordinates":"' + coords_str + '","options":{"profile":"driving-car","preference":"recommended"}}'
-                    encoded_json = urllib.parse.quote(json_str)
-                    enlace_ors = f"https://maps.openrouteservice.org/#/directions/{places_str}/data/{encoded_json}"
-                else:
-                    enlace_ors = ""
+                # ENLACES OFICIALES A PRUEBA DE BALAS
+                enlace_maps = "http://googleusercontent.com/maps.google.com/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
+                enlace_ors = "https://maps.openrouteservice.org/directions?a=" + ",".join(waypoints_ors) + "&b=0&c=0&k1=es-ES&k2=km" if waypoints_ors else ""
                 
                 data_resumen_general.append({
                     "Día": d['dia'],
