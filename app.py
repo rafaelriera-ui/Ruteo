@@ -368,7 +368,7 @@ else:
             else:
                 st.sidebar.info("Elige la hora de salida para cada ruta.")
 
-            # --- LÓGICA V2 GLOBAL (LIMPIA DE LABNU EN PANTALLA) ---
+            # --- LÓGICA V2 GLOBAL ---
             if tipo_ruteo == "Ruteo Optimizado (IA) v2" and usar_config_global_v2:
                 st.sidebar.markdown("**⚙️ Configuración Global (Aplica a todos los días)**")
                 for ruta in rutas_seleccionadas:
@@ -390,14 +390,13 @@ else:
                         if pd.isna(dept) or str(dept).strip() == '': continue
                         dept_str = str(dept).strip()
                         
-                        # IGNORAMOS LABNU EN LA INTERFAZ VISUAL COMPLETAMENTE
+                        # IGNORAMOS LABNU EN LA INTERFAZ VISUAL
                         if dept_str.upper() == 'LABNU': 
                             continue
                         
                         st.sidebar.markdown(f"🔹 *Depto: {dept_str}*")
                         l_dept_g = df_ruta_global[df_ruta_global['Departamento'] == dept]['Lugar'].unique().tolist()
                         
-                        # Por seguridad, si algún lugar se coló con nombre LABNU, lo volamos de la lista
                         l_dept_g = [loc for loc in l_dept_g if str(loc).strip().upper() != 'LABNU']
                         opc_dept_g = ["🤖 IA Decide"] + l_dept_g
                         
@@ -519,7 +518,7 @@ else:
         # --- BOTÓN DE CÁLCULO ---
         if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
             st.session_state['hora_salida_rutas_dict'] = hora_salida_rutas_dict
-            st.session_state['tipo_ruteo'] = tipo_ruteo 
+            st.session_state['tipo_ruteo'] = tipo_ruteo # <-- BLINDAJE EN MEMORIA PARA MANTENER LA HORA A LAS 09:00
             
             if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)", "Ruteo Optimizado (IA) v2"]:
                 st.session_state['min_parada_guardado'] = min_parada_global
@@ -667,7 +666,7 @@ else:
                                         routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                                         
                                         if tipo_ruteo == "Ruteo Optimizado (IA) v2":
-                                            # LA SOLUCIÓN MAESTRA: VARIABLES ACUMULATIVAS (CUMULVARS) PARA FORZAR ORDEN
+                                            # SOLUCIÓN CUMULVARS RE-IMPLEMENTADA Y MEJORADA
                                             def sequence_callback(from_index): return 1
                                             seq_call_idx = routing.RegisterUnaryTransitCallback(sequence_callback)
                                             routing.AddDimension(seq_call_idx, 0, 99999, True, "Sequence")
@@ -1437,8 +1436,9 @@ if st.session_state.get('calculo_terminado', False):
                         except Exception:
                             pass
                 
-                # ENLACES OFICIALES Y SOLICITADOS
-                enlace_maps = "https://www.google.com/maps/dir/-32.86315,-68.74454/-32.88245,-68.87469/-32.88351,-68.84/-32.8695,-68.82753/-32.92827,-68.8462/-32.95443,-68.83257/-32.92266,-68.86479/-32.92167,-68.8793/-32.93254,-68.8936/-32.93254,-68.87374/-32.94563,-68.87016/-32.90284,-68.87095" + "/".join(waypoints_maps) if waypoints_maps else ""
+                # ENLACES OFICIALES A PRUEBA DE BALAS 
+                # (Corrección del dominio corrupto: URL oficial limpia de Maps)
+                enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
                 
                 if waypoints_ors_json:
                     places_str = "/".join(places_ors)
