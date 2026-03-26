@@ -368,7 +368,7 @@ else:
             else:
                 st.sidebar.info("Elige la hora de salida para cada ruta.")
 
-            # --- LÓGICA V2 GLOBAL (LIMPIA DE LABNU EN PANTALLA) ---
+            # --- LÓGICA V2 GLOBAL ---
             if tipo_ruteo == "Ruteo Optimizado (IA) v2" and usar_config_global_v2:
                 st.sidebar.markdown("**⚙️ Configuración Global (Aplica a todos los días)**")
                 for ruta in rutas_seleccionadas:
@@ -390,14 +390,13 @@ else:
                         if pd.isna(dept) or str(dept).strip() == '': continue
                         dept_str = str(dept).strip()
                         
-                        # IGNORAMOS LABNU EN LA INTERFAZ VISUAL COMPLETAMENTE
+                        # IGNORAMOS LABNU EN LA INTERFAZ VISUAL
                         if dept_str.upper() == 'LABNU': 
                             continue
                         
                         st.sidebar.markdown(f"🔹 *Depto: {dept_str}*")
                         l_dept_g = df_ruta_global[df_ruta_global['Departamento'] == dept]['Lugar'].unique().tolist()
                         
-                        # Por seguridad, si algún lugar se coló con nombre LABNU, lo volamos de la lista
                         l_dept_g = [loc for loc in l_dept_g if str(loc).strip().upper() != 'LABNU']
                         opc_dept_g = ["🤖 IA Decide"] + l_dept_g
                         
@@ -459,7 +458,6 @@ else:
                                         if pd.isna(dept) or str(dept).strip() == '': continue
                                         dept_str = str(dept).strip()
                                         
-                                        # IGNORAMOS LABNU EN LA INTERFAZ
                                         if dept_str.upper() == 'LABNU': 
                                             continue
                                             
@@ -645,13 +643,13 @@ else:
                                             if idx_labnu != -1:
                                                 for i in range(N): extended_dist[i][N+1] = 99999999
                                                 extended_dist[idx_labnu][N+1] = 0
-                                                # Evitar que conecte Inicio -> LABNU directamente y deje a todos afuera
+                                                # Evitamos que inicie directo en LABNU y deje a los demás afuera
                                                 if idx_inicio == -1 and N > 1:
                                                     extended_dist[N][idx_labnu] = 99999999
                                             else:
                                                 for i in range(N): extended_dist[i][N+1] = 0
                                                 
-                                            # REGLA MAESTRA SIN CUMULVARS (100% LIBRE DE BUCLES): Bloqueo directo de arcos en reversa
+                                            # PENALIZACIONES DE ARCOS (REEMPLAZA A CUMULVARS PARA EVITAR BUCLES IMPOSIBLES)
                                             dept_config = opciones_deptos_dict.get(id_unico, {})
                                             for dept_str, config in dept_config.items():
                                                 sel_aa = config['aa']
@@ -672,12 +670,12 @@ else:
                                                 special_indices = set(target_last_nodes)
                                                 reg_indices = [i for i in range(N) if str(deptos_actuales[i]).strip() == dept_str and i not in special_indices and i != idx_inicio and i != idx_labnu]
                                                 
-                                                # 1. Los puntos especiales (cierre) NO pueden ir hacia los puntos regulares de su propio departamento
+                                                # Bloqueo: Los puntos especiales no pueden regresar a los normales
                                                 for sp in target_last_nodes:
                                                     for r in reg_indices:
                                                         extended_dist[sp][r] = 99999999
                                                         
-                                                # 2. Los puntos especiales más tardíos NO pueden ir a los puntos especiales más tempranos
+                                                # Bloqueo: Los puntos especiales tardíos no pueden regresar a los especiales tempranos
                                                 for i in range(len(target_last_nodes)):
                                                     later_sp = target_last_nodes[i]
                                                     for j in range(i):
@@ -697,6 +695,7 @@ else:
                                         
                                         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
                                         search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
+                                        search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
                                         search_parameters.time_limit.seconds = 5 
                                         
                                         solution = routing.SolveWithParameters(search_parameters)
@@ -1402,15 +1401,19 @@ if st.session_state.get('calculo_terminado', False):
                         try:
                             lat = float(partes[0].strip())
                             lon = float(partes[1].strip())
+                            wp_map = f"{lat},{lon}"
+                            wp_ors = f"{lon},{lat}"
                             
-                            waypoints_maps.append(f"{lat},{lon}")
-                            waypoints_ors_json.append(f"{lon},{lat}")
-                            places_ors.append("Parada")
+                            # FILTRO PARA EVITAR DUPLICADOS Y QUE MAPS/ORS NO SE VUELVAN LOCOS
+                            if not waypoints_maps or waypoints_maps[-1] != wp_map:
+                                waypoints_maps.append(wp_map)
+                                waypoints_ors_json.append(wp_ors)
+                                places_ors.append("Parada")
                         except Exception:
                             pass
                 
-                # ENLACES OFICIALES A PRUEBA DE BALAS (GOOGLE: /25 | ORS: JSON PURO)
-                enlace_maps = "https://www.google.com/maps/dir/-32.86315,-68.74454/-32.88245,-68.87469/-32.88351,-68.84/-32.8695,-68.82753/-32.92827,-68.8462/-32.95443,-68.83257/-32.92266,-68.86479/-32.92167,-68.8793/-32.93254,-68.8936/-32.93254,-68.87374/-32.94563,-68.87016/-32.90284,-68.87095" + "/".join(waypoints_maps) if waypoints_maps else ""
+                # ENLACES OFICIALES A PRUEBA DE BALAS
+                enlace_maps = "https://www.google.com/maps/dir/" + "/".join(waypoints_maps) if waypoints_maps else ""
                 
                 if waypoints_ors_json:
                     places_str = "/".join(places_ors)
