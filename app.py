@@ -368,7 +368,7 @@ else:
             else:
                 st.sidebar.info("Elige la hora de salida para cada ruta.")
 
-            # --- LÓGICA V2 GLOBAL (LIMPIA DE LABNU EN PANTALLA) ---
+            # --- LÓGICA V2 GLOBAL ---
             if tipo_ruteo == "Ruteo Optimizado (IA) v2" and usar_config_global_v2:
                 st.sidebar.markdown("**⚙️ Configuración Global (Aplica a todos los días)**")
                 for ruta in rutas_seleccionadas:
@@ -397,7 +397,6 @@ else:
                         st.sidebar.markdown(f"🔹 *Depto: {dept_str}*")
                         l_dept_g = df_ruta_global[df_ruta_global['Departamento'] == dept]['Lugar'].unique().tolist()
                         
-                        # Por seguridad, si algún lugar se coló con nombre LABNU, lo volamos de la lista
                         l_dept_g = [loc for loc in l_dept_g if str(loc).strip().upper() != 'LABNU']
                         opc_dept_g = ["🤖 IA Decide"] + l_dept_g
                         
@@ -459,7 +458,6 @@ else:
                                         if pd.isna(dept) or str(dept).strip() == '': continue
                                         dept_str = str(dept).strip()
                                         
-                                        # IGNORAMOS LABNU EN LA INTERFAZ
                                         if dept_str.upper() == 'LABNU': 
                                             continue
                                             
@@ -519,7 +517,7 @@ else:
         # --- BOTÓN DE CÁLCULO ---
         if st.sidebar.button("🗺️ Calcular Rutas", type="primary"):
             st.session_state['hora_salida_rutas_dict'] = hora_salida_rutas_dict
-            st.session_state['tipo_ruteo'] = tipo_ruteo # <-- BLINDAJE EN MEMORIA PARA MANTENER LA HORA A LAS 09:00
+            st.session_state['tipo_ruteo'] = tipo_ruteo # BLINDAJE EN MEMORIA PARA LA HORA 09:00
             
             if tipo_ruteo in ["Ruteo según Excel (Orden Original)", "Ruteo Optimizado (IA)", "Ruteo Optimizado (IA) v2"]:
                 st.session_state['min_parada_guardado'] = min_parada_global
@@ -613,6 +611,9 @@ else:
                                             if idx_fin != -1:
                                                 for i in range(N): extended_dist[i][N+1] = 99999999
                                                 extended_dist[idx_fin][N+1] = 0
+                                                # Bloqueo Terminal para V1:
+                                                for j in range(N+2):
+                                                    if j != N+1: extended_dist[idx_fin][j] = 99999999
                                             else:
                                                 for i in range(N): extended_dist[i][N+1] = 0
 
@@ -645,26 +646,19 @@ else:
                                             if idx_labnu != -1:
                                                 for i in range(N): extended_dist[i][N+1] = 99999999
                                                 extended_dist[idx_labnu][N+1] = 0
-                                                # Evitamos que inicie directo en LABNU y deje a los demás afuera
+                                                
+                                                # BLOQUEO ABSOLUTO: LABNU es un callejón sin salida (solo puede ir al Final N+1)
+                                                for j in range(N+2):
+                                                    if j != N+1:
+                                                        extended_dist[idx_labnu][j] = 99999999
+                                                        
+                                                # Evitar que el Inicio global "IA Decide" sea LABNU y termine el viaje ahí
                                                 if idx_inicio == -1 and N > 1:
                                                     extended_dist[N][idx_labnu] = 99999999
                                             else:
                                                 for i in range(N): extended_dist[i][N+1] = 0
 
-                                        manager = pywrapcp.RoutingIndexManager(N + 2, 1, [N], [N+1])
-                                        routing = pywrapcp.RoutingModel(manager)
-                                        
-                                        def distance_callback(from_index, to_index):
-                                            from_node = manager.IndexToNode(from_index)
-                                            to_node = manager.IndexToNode(to_index)
-                                            return int(extended_dist[from_node][to_node])
-                                            
-                                        transit_callback_index = routing.RegisterTransitCallback(distance_callback)
-                                        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-                                        
-                                        if tipo_ruteo == "Ruteo Optimizado (IA) v2":
-                                            # ELIMINAMOS CUMULVARS: USAMOS PICKUP AND DELIVERY NATIVO (100% Cero Bucles)
-                                            deptos_actuales = df_ruta['Departamento'].tolist()
+                                            # BLOQUEO MATEMÁTICO DE ARCOS PARA V2 (100% CERO BUCLES IMPOSIBLES)
                                             dept_config = opciones_deptos_dict.get(id_unico, {})
                                             
                                             for dept_str, config in dept_config.items():
@@ -686,36 +680,36 @@ else:
                                                 special_indices = set(target_last_nodes)
                                                 reg_indices = [i for i in range(N) if str(deptos_actuales[i]).strip() == dept_str and i not in special_indices and i != idx_inicio and i != idx_labnu]
                                                 
-                                                if len(target_last_nodes) > 0:
-                                                    first_special_node = manager.NodeToIndex(target_last_nodes[0])
+                                                # Muro 1: Los puntos especiales no pueden regresar a los normales
+                                                for sp in target_last_nodes:
                                                     for r in reg_indices:
-                                                        r_node = manager.NodeToIndex(r)
-                                                        # Obligamos nativamente a que todos los puntos normales del Depto se visiten ANTES del primer especial
-                                                        routing.AddPickupAndDelivery(r_node, first_special_node)
-                                                        routing.solver().Add(routing.VehicleVar(r_node) == routing.VehicleVar(first_special_node))
+                                                        extended_dist[sp][r] = 99999999
                                                         
-                                                for i in range(len(target_last_nodes) - 1):
-                                                    pickup_node = manager.NodeToIndex(target_last_nodes[i])
-                                                    delivery_node = manager.NodeToIndex(target_last_nodes[i+1])
-                                                    # Obligamos a que el especial [i] se visite ANTES que el especial [i+1]
-                                                    routing.AddPickupAndDelivery(pickup_node, delivery_node)
-                                                    routing.solver().Add(routing.VehicleVar(pickup_node) == routing.VehicleVar(delivery_node))
+                                                # Muro 2: Los puntos especiales tardíos no pueden regresar a los tempranos
+                                                for i in range(len(target_last_nodes)):
+                                                    later_sp = target_last_nodes[i]
+                                                    for j in range(i):
+                                                        earlier_sp = target_last_nodes[j]
+                                                        extended_dist[later_sp][earlier_sp] = 99999999
+
+                                        manager = pywrapcp.RoutingIndexManager(N + 2, 1, [N], [N+1])
+                                        routing = pywrapcp.RoutingModel(manager)
+                                        
+                                        def distance_callback(from_index, to_index):
+                                            from_node = manager.IndexToNode(from_index)
+                                            to_node = manager.IndexToNode(to_index)
+                                            return int(extended_dist[from_node][to_node])
+                                            
+                                        transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+                                        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
                                         
                                         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+                                        # MOTOR ESTABLE: SAVINGS funciona perfecto con los Muros de Arcos y no tira error
+                                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
                                         search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
                                         search_parameters.time_limit.seconds = 5 
                                         
-                                        # MULTIPLES INTENTOS DE SOLUCIÓN PARA ASEGURAR QUE NO FALLE
-                                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.SAVINGS
                                         solution = routing.SolveWithParameters(search_parameters)
-                                        
-                                        if not solution:
-                                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
-                                            solution = routing.SolveWithParameters(search_parameters)
-                                            
-                                        if not solution:
-                                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
-                                            solution = routing.SolveWithParameters(search_parameters)
                                         
                                         if solution:
                                             idx = routing.Start(0)
@@ -1421,7 +1415,6 @@ if st.session_state.get('calculo_terminado', False):
                             wp_map = f"{lat},{lon}"
                             wp_ors = f"{lon},{lat}"
                             
-                            # FILTRO PARA EVITAR DUPLICADOS Y QUE MAPS NO SE VUELVA LOCO
                             if not waypoints_maps or waypoints_maps[-1] != wp_map:
                                 waypoints_maps.append(wp_map)
                                 waypoints_ors_json.append(wp_ors)
@@ -1430,7 +1423,7 @@ if st.session_state.get('calculo_terminado', False):
                             pass
                 
                 # ENLACES OFICIALES A PRUEBA DE BALAS
-                enlace_maps = "https://www.google.com/maps/dir/-32.86315,-68.74454/-32.88245,-68.87469/-32.88351,-68.84/-32.8695,-68.82753/-32.92827,-68.8462/-32.95443,-68.83257/-32.92266,-68.86479/-32.92167,-68.8793/-32.93254,-68.8936/-32.93254,-68.87374/-32.94563,-68.87016/-32.90284,-68.87095" + "/".join(waypoints_maps) if waypoints_maps else ""
+                enlace_maps = "https://www.google.com/maps/dir/-32.86315,-68.74454/-32.88245,-68.87469/-32.88351,-68.84/-32.8695,-68.82753/-32.92827,-68.8462/-32.95443,-68.83257/-32.92266,-68.86479/-32.92167,-68.8793/-32.93254,-68.8936/-32.93254,-68.87374/-32.94563,-68.87016/-32.90284,-68.87095/" + "/".join(waypoints_maps) if waypoints_maps else ""
                 
                 if waypoints_ors_json:
                     places_str = "/".join(places_ors)
